@@ -15,6 +15,7 @@ class WeChatMessage:
     msg_type: str
     content: str
     msg_id: str | None = None
+    gateway: str = "official"
 
 
 def verify_signature(*, token: str, timestamp: str, nonce: str, signature: str) -> bool:

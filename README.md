@@ -3,14 +3,15 @@
 A WeChat gateway for chatting with any A2A-compatible agent.
 
 This project is intentionally a gateway, not a WeChat-as-A2A service. It accepts
-WeChat Official Account webhook messages, forwards user text to an upstream A2A
-agent with JSON-RPC `SendMessage`, and returns the agent reply to WeChat.
+WeChat messages, forwards user text to an upstream A2A agent with JSON-RPC
+`SendMessage`, and returns the agent reply to WeChat.
 
 ## Status
 
 Early gateway. The current implementation supports:
 
 - WeChat Official Account webhook signature verification
+- WeChat personal-account style iLink QR login and long polling
 - WeChat text-message XML parsing and text replies
 - Per-WeChat-account/user A2A conversation state
 - A2A `contextId` reuse across WeChat messages
@@ -22,11 +23,18 @@ Early gateway. The current implementation supports:
 
 ## How It Works
 
-`wechat-to-a2a` exposes a WeChat Official Account callback endpoint and forwards
-each inbound text message to the configured A2A JSON-RPC endpoint with
-`SendMessage`. It keys conversation state by WeChat account and user, then stores
-the upstream A2A `contextId` so later WeChat messages continue the same A2A
-conversation.
+`wechat-to-a2a` can run in two modes:
+
+- `ilink-run`: preferred low-friction mode. It logs into WeChat via Tencent
+  iLink QR credentials, long-polls `getupdates`, and replies with
+  `sendmessage`.
+- `serve`: WeChat Official Account webhook mode for deployments that already
+  have a public HTTPS callback URL.
+
+Both modes forward each inbound text message to the configured A2A JSON-RPC
+endpoint with `SendMessage`. The gateway keys conversation state by WeChat
+gateway/account/user, then stores the upstream A2A `contextId` so later WeChat
+messages continue the same A2A conversation.
 
 When an A2A service returns a non-terminal task state such as `input-required`,
 the gateway also stores the returned `taskId` and sends the next WeChat message
@@ -36,7 +44,36 @@ cleared while the `contextId` remains available for future turns.
 The gateway does not expose WeChat as an A2A service. It is a WeChat entrypoint
 for any compatible upstream A2A service.
 
-## Quick Start
+## iLink Quick Start
+
+First login with QR code:
+
+```bash
+uv sync --all-extras
+uv run wechat-to-a2a ilink-login
+```
+
+The login stores iLink credentials under `~/.wechat-to-a2a/ilink` by default.
+Then run the gateway against any A2A endpoint:
+
+```bash
+export WECHAT_TO_A2A_A2A_URL="http://127.0.0.1:8080/"
+export WECHAT_TO_A2A_A2A_BEARER_TOKEN="optional-upstream-token"
+export WECHAT_TO_A2A_CONVERSATION_STATE_PATH=".state/conversations.json"
+
+uv run wechat-to-a2a ilink-run
+```
+
+You can also bypass saved credentials:
+
+```bash
+export WECHAT_TO_A2A_ILINK_ACCOUNT_ID="your-ilink-account-id"
+export WECHAT_TO_A2A_ILINK_TOKEN="your-ilink-token"
+export WECHAT_TO_A2A_ILINK_BASE_URL="https://ilinkai.weixin.qq.com"
+uv run wechat-to-a2a ilink-run
+```
+
+## Official Account Quick Start
 
 ```bash
 uv sync --all-extras
@@ -75,6 +112,9 @@ Environment variables use the `WECHAT_TO_A2A_` prefix.
 | `WECHAT_TO_A2A_CONVERSATION_STATE_PATH` | No | JSON file used to persist WeChat-to-A2A conversation state |
 | `WECHAT_TO_A2A_WECHAT_REPLY_MAX_CHARS` | No | Maximum text characters per WeChat reply chunk, default `2000` |
 | `WECHAT_TO_A2A_WECHAT_SPLIT_MULTILINE_MESSAGES` | No | Split short multiline replies into separate chunks before joining, default `false` |
+| `WECHAT_TO_A2A_ILINK_ACCOUNT_ID` | No | iLink account ID for `ilink-run`; inferred from saved login when possible |
+| `WECHAT_TO_A2A_ILINK_TOKEN` | No | iLink bot token for `ilink-run`; loaded from saved login when possible |
+| `WECHAT_TO_A2A_ILINK_BASE_URL` | No | iLink API base URL, default `https://ilinkai.weixin.qq.com` |
 
 ## License
 

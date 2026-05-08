@@ -12,6 +12,18 @@ def test_cli_accepts_serve_command() -> None:
     assert args.port == 9000
 
 
+def test_cli_accepts_ilink_login_command() -> None:
+    args = build_parser().parse_args(["ilink-login", "--timeout", "30"])
+    assert args.command == "ilink-login"
+    assert args.timeout == 30
+
+
+def test_cli_accepts_ilink_run_command() -> None:
+    args = build_parser().parse_args(["ilink-run", "--account-id", "acct"])
+    assert args.command == "ilink-run"
+    assert args.account_id == "acct"
+
+
 def test_cli_requires_command() -> None:
     with pytest.raises(SystemExit) as exc_info:
         build_parser().parse_args([])

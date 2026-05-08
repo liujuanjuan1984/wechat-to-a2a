@@ -19,6 +19,19 @@ def test_conversation_key_includes_wechat_account_and_user() -> None:
     assert conversation_key_for_wechat(message) == "wechat:official:gh_account:user-1"
 
 
+def test_conversation_key_distinguishes_ilink_gateway() -> None:
+    message = WeChatMessage(
+        to_user="ilink-account",
+        from_user="user-1",
+        create_time=123,
+        msg_type="text",
+        content="hello",
+        gateway="ilink",
+    )
+
+    assert conversation_key_for_wechat(message) == "wechat:ilink:ilink-account:user-1"
+
+
 def test_conversation_store_persists_a2a_state(tmp_path) -> None:
     path = tmp_path / "state" / "conversations.json"
     store = ConversationStore(path)

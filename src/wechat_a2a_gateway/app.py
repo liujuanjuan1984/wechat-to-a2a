@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 
 
 def create_app(settings: Settings, gateway: WeChatA2AGateway | None = None) -> FastAPI:
+    if not settings.wechat_token:
+        raise RuntimeError("WECHAT_TO_A2A_WECHAT_TOKEN is required for official webhook mode")
+    wechat_token = settings.wechat_token
     app = FastAPI(title="wechat-to-a2a", version="0.1.0")
     if gateway is None:
         client = A2AClient(
@@ -41,7 +44,7 @@ def create_app(settings: Settings, gateway: WeChatA2AGateway | None = None) -> F
         echostr: str = Query(...),
     ) -> Response:
         if not verify_signature(
-            token=settings.wechat_token,
+            token=wechat_token,
             timestamp=timestamp,
             nonce=nonce,
             signature=signature,
@@ -57,7 +60,7 @@ def create_app(settings: Settings, gateway: WeChatA2AGateway | None = None) -> F
         nonce: str = Query(...),
     ) -> Response:
         if not verify_signature(
-            token=settings.wechat_token,
+            token=wechat_token,
             timestamp=timestamp,
             nonce=nonce,
             signature=signature,

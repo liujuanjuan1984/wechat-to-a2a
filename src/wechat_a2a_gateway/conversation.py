@@ -115,7 +115,7 @@ class ConversationStore:
 
 
 def conversation_key_for_wechat(message: WeChatMessage) -> str:
-    return f"wechat:official:{message.to_user}:{message.from_user}"
+    return f"wechat:{message.gateway}:{message.to_user}:{message.from_user}"
 
 
 def _optional_str(value: object) -> str | None:

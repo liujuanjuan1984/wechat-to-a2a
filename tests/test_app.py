@@ -41,6 +41,11 @@ def test_health() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_create_app_requires_wechat_token_for_official_mode() -> None:
+    with pytest.raises(RuntimeError, match="WECHAT_TO_A2A_WECHAT_TOKEN"):
+        create_app(Settings(a2a_url="https://agent.example/a2a"))
+
+
 def test_get_wechat_verification_rejects_invalid_signature() -> None:
     app = create_app(Settings(wechat_token="secret", a2a_url="https://agent.example/a2a"))
     client = TestClient(app)
