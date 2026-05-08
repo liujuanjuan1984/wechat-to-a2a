@@ -45,7 +45,7 @@ dev = [
 ]
 
 [project.scripts]
-wechat-to-a2a = "wechat_a2a_gateway.cli:main"
+wechat-to-a2a = "wechat_to_a2a.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/liujuanjuan1984/wechat-to-a2a"
@@ -60,7 +60,7 @@ fallback_version = "0+unknown"
 tag_regex = "^v?(?P<version>.+)$"
 
 [tool.setuptools.package-data]
-wechat_a2a_gateway = ["py.typed"]
+wechat_to_a2a = ["py.typed"]
 
 [tool.ruff]
 line-length = 100
@@ -74,7 +74,7 @@ quote-style = "double"
 
 [tool.mypy]
 python_version = "3.11"
-files = ["src/wechat_a2a_gateway"]
+files = ["src/wechat_to_a2a"]
 show_error_codes = true
 pretty = true
 warn_redundant_casts = true
@@ -83,5 +83,5 @@ check_untyped_defs = true
 warn_return_any = true
 
 [tool.pytest.ini_options]
-addopts = "--cov=src/wechat_a2a_gateway --cov-report=term-missing --cov-report=json:.coverage.json --cov-fail-under=80"
+addopts = "--cov=src/wechat_to_a2a --cov-report=term-missing --cov-report=json:.coverage.json --cov-fail-under=80"
 asyncio_mode = "auto"

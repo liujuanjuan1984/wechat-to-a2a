@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from wechat_a2a_gateway.cli import build_parser
+from wechat_to_a2a.cli import build_parser
 
 
 def test_cli_accepts_serve_command() -> None:

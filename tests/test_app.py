@@ -6,9 +6,9 @@ import xml.etree.ElementTree as ET
 import pytest
 from fastapi.testclient import TestClient
 
-from wechat_a2a_gateway.a2a_client import A2AReply
-from wechat_a2a_gateway.app import create_app
-from wechat_a2a_gateway.settings import Settings
+from wechat_to_a2a.a2a_client import A2AReply
+from wechat_to_a2a.app import create_app
+from wechat_to_a2a.settings import Settings
 
 
 def _signature(token: str, timestamp: str, nonce: str) -> str:
@@ -74,7 +74,7 @@ def test_post_text_message_forwards_to_a2a(monkeypatch: pytest.MonkeyPatch, tmp_
             text="agent reply", context_id="ctx-user", task_id="task-1", state="completed"
         )
 
-    monkeypatch.setattr("wechat_a2a_gateway.a2a_client.A2AClient.send_message", fake_send_message)
+    monkeypatch.setattr("wechat_to_a2a.a2a_client.A2AClient.send_message", fake_send_message)
     app = create_app(_settings(tmp_path))
     client = TestClient(app)
 

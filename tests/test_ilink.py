@@ -4,8 +4,8 @@ import json
 
 import httpx
 
-from wechat_a2a_gateway.gateway import GatewayReply
-from wechat_a2a_gateway.ilink import (
+from wechat_to_a2a.gateway import GatewayReply
+from wechat_to_a2a.ilink import (
     ILinkClient,
     ILinkCredentials,
     ILinkGatewayRunner,

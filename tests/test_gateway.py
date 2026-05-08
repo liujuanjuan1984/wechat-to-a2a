@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from wechat_a2a_gateway.a2a_client import A2AReply
-from wechat_a2a_gateway.conversation import ConversationStore
-from wechat_a2a_gateway.gateway import WeChatA2AGateway
-from wechat_a2a_gateway.wechat import WeChatMessage
+from wechat_to_a2a.a2a_client import A2AReply
+from wechat_to_a2a.conversation import ConversationStore
+from wechat_to_a2a.gateway import WeChatA2AGateway
+from wechat_to_a2a.wechat import WeChatMessage
 
 
 class FakeA2AClient:

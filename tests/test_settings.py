@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from wechat_a2a_gateway.settings import Settings, default_conversation_state_path
+from wechat_to_a2a.settings import Settings, default_conversation_state_path
 
 
 def test_default_conversation_state_path_uses_home_directory(monkeypatch) -> None:

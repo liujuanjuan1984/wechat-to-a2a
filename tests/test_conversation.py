@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from wechat_a2a_gateway.conversation import (
+from wechat_to_a2a.conversation import (
     ConversationStore,
     conversation_key_for_wechat,
 )
-from wechat_a2a_gateway.wechat import WeChatMessage
+from wechat_to_a2a.wechat import WeChatMessage
 
 
 def test_conversation_key_includes_wechat_account_and_user() -> None:

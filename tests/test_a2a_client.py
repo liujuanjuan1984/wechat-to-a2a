@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from wechat_a2a_gateway.a2a_client import A2AClient
+from wechat_to_a2a.a2a_client import A2AClient
 
 
 @pytest.mark.asyncio
