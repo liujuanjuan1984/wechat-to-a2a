@@ -36,6 +36,12 @@ class A2AReply:
     state: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class _SDKClientEntry:
+    client: Client
+    streaming: bool
+
+
 class A2AClient:
     def __init__(
         self,
@@ -55,7 +61,7 @@ class A2AClient:
         self._stream_idle_timeout_seconds = stream_idle_timeout_seconds
         self._stream_heartbeat_interval_seconds = stream_heartbeat_interval_seconds
         self._client = client
-        self._sdk_clients: dict[bool, Client] = {}
+        self._sdk_clients: dict[bool, _SDKClientEntry] = {}
 
     async def send_message(
         self,
@@ -75,7 +81,10 @@ class A2AClient:
             request.message.task_id = task_id
 
         accumulator = _StreamAccumulator()
-        async for event in self._iter_events_with_timeouts(sdk_client.send_message(request)):
+        async for event in self._iter_events_with_timeouts(
+            sdk_client.client.send_message(request),
+            streaming=sdk_client.streaming,
+        ):
             if event is None:
                 logger.debug("A2A upstream stream heartbeat")
                 continue
@@ -88,7 +97,7 @@ class A2AClient:
             raise RuntimeError("A2A send_message returned no response")
         return reply
 
-    async def _get_sdk_client(self, *, streaming: bool) -> Client:
+    async def _get_sdk_client(self, *, streaming: bool) -> _SDKClientEntry:
         cached_client = self._sdk_clients.get(streaming)
         if cached_client is not None:
             return cached_client
@@ -103,9 +112,12 @@ class A2AClient:
         )
         factory = ClientFactory(config)
         card = await self._fetch_agent_card(httpx_client)
-        sdk_client = factory.create(card)
-        self._sdk_clients[streaming] = sdk_client
-        return sdk_client
+        entry = _SDKClientEntry(
+            client=factory.create(card),
+            streaming=streaming and bool(card.capabilities.streaming),
+        )
+        self._sdk_clients[streaming] = entry
+        return entry
 
     async def _fetch_agent_card(self, httpx_client: httpx.AsyncClient):
         response = await asyncio.wait_for(
@@ -137,12 +149,18 @@ class A2AClient:
     async def _iter_events_with_timeouts(
         self,
         stream: AsyncIterator[StreamResponse],
+        *,
+        streaming: bool,
     ) -> AsyncIterator[StreamResponse | None]:
         started_at = time.monotonic()
         last_activity_at = started_at
-        total_timeout = _positive_float_or_none(self._timeout_seconds)
-        idle_timeout = _positive_float_or_none(self._stream_idle_timeout_seconds)
-        heartbeat_interval = _positive_float_or_none(self._stream_heartbeat_interval_seconds)
+        total_timeout = None if streaming else _positive_float_or_none(self._timeout_seconds)
+        idle_timeout = (
+            _positive_float_or_none(self._stream_idle_timeout_seconds) if streaming else None
+        )
+        heartbeat_interval = (
+            _positive_float_or_none(self._stream_heartbeat_interval_seconds) if streaming else None
+        )
         stream_iter = _iter_stream_events_with_heartbeat(
             stream,
             heartbeat_interval_seconds=heartbeat_interval or 0.0,
@@ -270,11 +288,9 @@ async def _iter_stream_events_with_heartbeat(
                 if not done:
                     yield None
                     continue
-            else:
-                await next_event_task
 
             try:
-                event = next_event_task.result()
+                event = await next_event_task
             except StopAsyncIteration:
                 return
 
@@ -286,8 +302,8 @@ async def _iter_stream_events_with_heartbeat(
             with suppress(asyncio.CancelledError):
                 await next_event_task
         else:
-            with suppress(StopAsyncIteration, asyncio.CancelledError):
-                next_event_task.result()
+            with suppress(asyncio.CancelledError):
+                next_event_task.exception()
 
 
 def _positive_float_or_none(value: float) -> float | None:

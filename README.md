@@ -116,7 +116,7 @@ Environment variables use the `WECHAT_TO_A2A_` prefix.
 | `WECHAT_TO_A2A_WECHAT_TOKEN` | Official mode only | Token configured in WeChat Official Account callback settings |
 | `WECHAT_TO_A2A_UPSTREAM_A2A_CARD_URL` | Yes | Upstream A2A 1.0 Agent Card URL; the SDK resolves the JSON-RPC endpoint from the card's advertised interfaces |
 | `WECHAT_TO_A2A_UPSTREAM_A2A_BEARER_TOKEN` | No | Bearer token sent when fetching the Agent Card and calling the upstream A2A endpoint |
-| `WECHAT_TO_A2A_UPSTREAM_A2A_TIMEOUT_SECONDS` | No | Total timeout for one upstream A2A turn, default `300` |
+| `WECHAT_TO_A2A_UPSTREAM_A2A_TIMEOUT_SECONDS` | No | Timeout for Agent Card fetches and non-streaming upstream A2A turns, default `300`; streaming turns are governed by stream idle timeout instead |
 | `WECHAT_TO_A2A_UPSTREAM_A2A_STREAMING_ENABLED` | No | Whether to request upstream A2A streaming when the Agent Card supports it, default `true` |
 | `WECHAT_TO_A2A_UPSTREAM_A2A_STREAM_IDLE_TIMEOUT_SECONDS` | No | Idle timeout while waiting for upstream stream activity, default `60`; set `0` to disable |
 | `WECHAT_TO_A2A_UPSTREAM_A2A_STREAM_HEARTBEAT_INTERVAL_SECONDS` | No | Local heartbeat interval while waiting on upstream stream events, default `15`; set `0` to disable |

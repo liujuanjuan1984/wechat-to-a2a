@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -7,6 +9,16 @@ from wechat_to_a2a.a2a_client import A2AClient, _task_state_to_text
 
 AGENT_CARD_URL = "https://agent.example/.well-known/agent-card.json"
 AGENT_ENDPOINT = "https://agent.example/a2a"
+
+
+class _DelayedStream(httpx.AsyncByteStream):
+    def __init__(self, content: bytes, *, delay_seconds: float) -> None:
+        self._content = content
+        self._delay_seconds = delay_seconds
+
+    async def __aiter__(self):
+        await asyncio.sleep(self._delay_seconds)
+        yield self._content
 
 
 def _agent_card(endpoint: str = AGENT_ENDPOINT, *, streaming: bool = False) -> dict[str, object]:
@@ -224,6 +236,38 @@ async def test_send_message_consumes_streaming_events_when_agent_supports_stream
     assert reply.text == "hello\n back"
     assert reply.context_id == "ctx-1"
     assert reply.task_id == "task-1"
+    assert reply.state == "completed"
+
+
+@pytest.mark.asyncio
+async def test_streaming_turn_is_not_cut_off_by_request_timeout() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json=_agent_card(streaming=True))
+        stream = (
+            'data: {"jsonrpc":"2.0","id":"1","result":{"artifactUpdate":'
+            '{"taskId":"task-1","contextId":"ctx-1","artifact":{"parts":[{"text":"late"}]}}}}\n\n'
+            'data: {"jsonrpc":"2.0","id":"1","result":{"statusUpdate":'
+            '{"taskId":"task-1","contextId":"ctx-1","status":{"state":"TASK_STATE_COMPLETED"}}}}\n\n'
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_DelayedStream(stream.encode(), delay_seconds=0.03),
+        )
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = A2AClient(
+            agent_card_url=AGENT_CARD_URL,
+            timeout_seconds=0.01,
+            stream_idle_timeout_seconds=1.0,
+            stream_heartbeat_interval_seconds=0.001,
+            client=http_client,
+        )
+        reply = await client.send_message(text="hello")
+
+    assert reply.text == "late"
     assert reply.state == "completed"
 
 
