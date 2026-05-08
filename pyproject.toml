@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=80", "setuptools-scm[toml]>=8,<10"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wechat-to-a2a"
+dynamic = ["version"]
+description = "A WeChat gateway for chatting with any A2A-compatible agent"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [
+    { name = "liujuanjuan1984", email = "liujuanjuan1984@gmail.com" },
+]
+keywords = ["a2a", "agent", "wechat", "gateway", "webhook"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: FastAPI",
+    "Topic :: Communications :: Chat",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+]
+dependencies = [
+    "fastapi>=0.110,<1.0",
+    "httpx>=0.27,<1.0",
+    "pydantic>=2.6,<3.0",
+    "pydantic-settings>=2.2,<3.0",
+    "uvicorn>=0.29,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.19.1,<2.0",
+    "pip-audit>=2.9,<3.0",
+    "pre-commit>=4.5.1,<5.0",
+    "pytest>=8.0,<10.0",
+    "pytest-asyncio>=0.23,<2.0",
+    "pytest-cov>=7.0.0,<8.0.0",
+    "ruff>=0.5,<0.16",
+]
+
+[project.scripts]
+wechat-to-a2a = "wechat_a2a_gateway.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/liujuanjuan1984/wechat-to-a2a"
+Repository = "https://github.com/liujuanjuan1984/wechat-to-a2a"
+Issues = "https://github.com/liujuanjuan1984/wechat-to-a2a/issues"
+
+[tool.uv]
+package = true
+
+[tool.setuptools_scm]
+fallback_version = "0+unknown"
+tag_regex = "^v?(?P<version>.+)$"
+
+[tool.setuptools.package-data]
+wechat_a2a_gateway = ["py.typed"]
+
+[tool.ruff]
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/wechat_a2a_gateway"]
+show_error_codes = true
+pretty = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+check_untyped_defs = true
+warn_return_any = true
+
+[tool.pytest.ini_options]
+addopts = "--cov=src/wechat_a2a_gateway --cov-report=term-missing --cov-report=json:.coverage.json --cov-fail-under=80"
+asyncio_mode = "auto"
