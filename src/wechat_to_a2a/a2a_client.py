@@ -58,6 +58,7 @@ class A2AClient:
         self._timeout_seconds = timeout_seconds
         self._stream_idle_timeout_seconds = stream_idle_timeout_seconds
         self._client = client
+        self._owns_client = client is None
         self._sdk_client: _SDKClientEntry | None = None
 
     async def send_message(
@@ -181,6 +182,16 @@ class A2AClient:
         if self._bearer_token:
             client.headers["Authorization"] = f"Bearer {self._bearer_token}"
         return client
+
+    async def aclose(self) -> None:
+        if not self._owns_client:
+            return
+        if self._sdk_client is not None:
+            close = getattr(self._sdk_client.client, "close", None)
+            if callable(close):
+                await close()
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
 
     async def _iter_events_with_timeouts(
         self,

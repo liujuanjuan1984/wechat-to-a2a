@@ -4,7 +4,9 @@ import argparse
 import asyncio
 import logging
 import os
+from collections.abc import Coroutine
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 
@@ -103,8 +105,13 @@ def main(argv: list[str] | None = None) -> int:
             send_chunk_delay_seconds=args.send_chunk_delay,
         )
         logging.info("Starting iLink gateway for account_id=%s", credentials.account_id)
-        asyncio.run(runner.run_forever())
-        return 0
+        return _run_until_interrupted(
+            _run_ilink_gateway(
+                runner=runner,
+                a2a_client=a2a_client,
+                ilink_client=ilink_client,
+            )
+        )
 
     parser.error(f"unknown command: {args.command}")
     return 2
@@ -142,6 +149,28 @@ def _resolve_ilink_credentials(
 
 def _single_saved_account_id(state_store: ILinkStateStore) -> str | None:
     return state_store.single_saved_account_id()
+
+
+def _run_until_interrupted(coro: Coroutine[Any, Any, Any]) -> int:
+    try:
+        asyncio.run(coro)
+    except KeyboardInterrupt:
+        logging.info("Shutdown requested; exiting.")
+        return 130
+    return 0
+
+
+async def _run_ilink_gateway(
+    *,
+    runner: ILinkGatewayRunner,
+    a2a_client: A2AClient,
+    ilink_client: ILinkClient,
+) -> None:
+    try:
+        await runner.run_forever()
+    finally:
+        await a2a_client.aclose()
+        await ilink_client.aclose()
 
 
 if __name__ == "__main__":
