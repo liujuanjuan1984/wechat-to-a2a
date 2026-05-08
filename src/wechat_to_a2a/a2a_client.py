@@ -246,6 +246,7 @@ class A2AClient:
 class _StreamAccumulator:
     def __init__(self) -> None:
         self._chunks: list[str] = []
+        self._status_chunks: list[str] = []
         self._final_text: str | None = None
         self._event_kinds: list[str] = []
         self._last_event: dict[str, object] = {}
@@ -273,7 +274,7 @@ class _StreamAccumulator:
         raise RuntimeError(f"unexpected A2A response shape: {response!r}")
 
     def reply(self) -> A2AReply | None:
-        text = self._final_text if self._final_text is not None else "\n".join(self._chunks)
+        text = self._text()
         if not text and not (self.context_id or self.task_id or self.state):
             return None
         return A2AReply(
@@ -287,12 +288,13 @@ class _StreamAccumulator:
         return dict(self._last_event)
 
     def summary(self) -> dict[str, object]:
-        text = self._final_text if self._final_text is not None else "\n".join(self._chunks)
+        text = self._text()
         return {
             "events": self.event_count,
             "event_kinds": list(self._event_kinds),
             "text_chars": len(text),
             "chunk_count": len(self._chunks),
+            "status_chunk_count": len(self._status_chunks),
             "final_text_chars": len(self._final_text or ""),
             "context_id": self.context_id,
             "task_id": self.task_id,
@@ -302,7 +304,8 @@ class _StreamAccumulator:
 
     def _consume_task(self, task: Task) -> None:
         reply = _reply_from_task(task)
-        self._final_text = reply.text
+        if reply.text:
+            self._final_text = reply.text
         self.context_id = reply.context_id or self.context_id
         self.task_id = reply.task_id or self.task_id
         self.state = reply.state or self.state
@@ -343,7 +346,7 @@ class _StreamAccumulator:
         if update.status.HasField("message"):
             text = _extract_text(update.status.message.parts)
         if text:
-            self._chunks.append(text)
+            self._status_chunks.append(text)
         self.context_id = update.context_id or self.context_id
         self.task_id = update.task_id or self.task_id
         self.state = _task_state_to_text(update.status.state) or self.state
@@ -362,6 +365,13 @@ class _StreamAccumulator:
             "state": self.state,
             **extra,
         }
+
+    def _text(self) -> str:
+        if self._final_text:
+            return self._final_text
+        if self._chunks:
+            return "\n".join(self._chunks)
+        return "\n".join(self._status_chunks)
 
 
 async def _iter_stream_events_with_heartbeat(

@@ -248,6 +248,13 @@ async def test_send_message_consumes_streaming_events_when_agent_supports_stream
         assert b"SendStreamingMessage" in payload
         stream = "\n\n".join(
             [
+                'data: {"jsonrpc":"2.0","id":"1","result":{"task":'
+                '{"id":"task-1","contextId":"ctx-1","status":{"state":"TASK_STATE_WORKING"},'
+                '"artifacts":[]}}}',
+                'data: {"jsonrpc":"2.0","id":"1","result":{"statusUpdate":'
+                '{"taskId":"task-1","contextId":"ctx-1","status":'
+                '{"state":"TASK_STATE_WORKING","message":{"messageId":"message-progress",'
+                '"role":"ROLE_AGENT","parts":[{"text":"Working..."}]}}}}}',
                 'data: {"jsonrpc":"2.0","id":"1","result":{"artifactUpdate":'
                 '{"taskId":"task-1","contextId":"ctx-1","artifact":{"parts":'
                 '[{"text":"hello"}]}}}}',
