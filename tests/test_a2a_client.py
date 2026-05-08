@@ -9,7 +9,7 @@ AGENT_CARD_URL = "https://agent.example/.well-known/agent-card.json"
 AGENT_ENDPOINT = "https://agent.example/a2a"
 
 
-def _agent_card(endpoint: str = AGENT_ENDPOINT) -> dict[str, object]:
+def _agent_card(endpoint: str = AGENT_ENDPOINT, *, streaming: bool = False) -> dict[str, object]:
     return {
         "name": "agent",
         "description": "test agent",
@@ -21,7 +21,7 @@ def _agent_card(endpoint: str = AGENT_ENDPOINT) -> dict[str, object]:
             }
         ],
         "version": "1.0.0",
-        "capabilities": {},
+        "capabilities": {"streaming": streaming},
         "defaultInputModes": ["text/plain"],
         "defaultOutputModes": ["text/plain"],
     }
@@ -183,6 +183,48 @@ async def test_send_message_extracts_text_from_message_response() -> None:
     assert reply.context_id == "ctx-1"
     assert reply.task_id is None
     assert reply.state is None
+
+
+@pytest.mark.asyncio
+async def test_send_message_consumes_streaming_events_when_agent_supports_streaming() -> None:
+    seen_streaming_request = False
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_streaming_request
+        if request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json=_agent_card(streaming=True))
+        payload = request.read()
+        seen_streaming_request = True
+        assert b"SendStreamingMessage" in payload
+        stream = "\n\n".join(
+            [
+                'data: {"jsonrpc":"2.0","id":"1","result":{"artifactUpdate":'
+                '{"taskId":"task-1","contextId":"ctx-1","artifact":{"parts":'
+                '[{"text":"hello"}]}}}}',
+                'data: {"jsonrpc":"2.0","id":"1","result":{"artifactUpdate":'
+                '{"taskId":"task-1","contextId":"ctx-1","artifact":{"parts":'
+                '[{"text":" back"}]}}}}',
+                'data: {"jsonrpc":"2.0","id":"1","result":{"statusUpdate":'
+                '{"taskId":"task-1","contextId":"ctx-1","status":'
+                '{"state":"TASK_STATE_COMPLETED"}}}}',
+            ]
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=f"{stream}\n\n",
+        )
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = A2AClient(agent_card_url=AGENT_CARD_URL, client=http_client)
+        reply = await client.send_message(text="hello")
+
+    assert seen_streaming_request
+    assert reply.text == "hello\n back"
+    assert reply.context_id == "ctx-1"
+    assert reply.task_id == "task-1"
+    assert reply.state == "completed"
 
 
 @pytest.mark.asyncio

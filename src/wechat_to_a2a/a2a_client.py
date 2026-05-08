@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+import asyncio
+import logging
+import time
+from collections.abc import AsyncIterator, Iterable
+from contextlib import suppress
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -9,6 +13,19 @@ from a2a.client import Client, ClientConfig, ClientFactory
 from a2a.client.card_resolver import parse_agent_card
 from a2a.client.client_factory import TransportProtocol
 from a2a.types import Part, Role, SendMessageRequest, StreamResponse, Task, TaskState
+
+logger = logging.getLogger(__name__)
+
+TURN_TERMINAL_STATES = frozenset(
+    {
+        "auth-required",
+        "canceled",
+        "completed",
+        "failed",
+        "input-required",
+        "rejected",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,14 +42,20 @@ class A2AClient:
         *,
         agent_card_url: str,
         bearer_token: str | None = None,
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float = 300.0,
+        streaming_enabled: bool = True,
+        stream_idle_timeout_seconds: float = 60.0,
+        stream_heartbeat_interval_seconds: float = 15.0,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._agent_card_url = agent_card_url
         self._bearer_token = bearer_token
         self._timeout_seconds = timeout_seconds
+        self._streaming_enabled = streaming_enabled
+        self._stream_idle_timeout_seconds = stream_idle_timeout_seconds
+        self._stream_heartbeat_interval_seconds = stream_heartbeat_interval_seconds
         self._client = client
-        self._sdk_client: Client | None = None
+        self._sdk_clients: dict[bool, Client] = {}
 
     async def send_message(
         self,
@@ -41,7 +64,7 @@ class A2AClient:
         context_id: str | None = None,
         task_id: str | None = None,
     ) -> A2AReply:
-        sdk_client = await self._get_sdk_client()
+        sdk_client = await self._get_sdk_client(streaming=self._streaming_enabled)
         request = SendMessageRequest()
         request.message.message_id = uuid4().hex
         request.message.role = Role.ROLE_USER
@@ -51,31 +74,44 @@ class A2AClient:
         if task_id:
             request.message.task_id = task_id
 
-        latest: StreamResponse | None = None
-        async for event in sdk_client.send_message(request):
-            latest = event
-        if latest is None:
-            raise RuntimeError("A2A send_message returned no response")
-        return _reply_from_stream_response(latest)
+        accumulator = _StreamAccumulator()
+        async for event in self._iter_events_with_timeouts(sdk_client.send_message(request)):
+            if event is None:
+                logger.debug("A2A upstream stream heartbeat")
+                continue
+            accumulator.consume(event)
+            if accumulator.state in TURN_TERMINAL_STATES:
+                break
 
-    async def _get_sdk_client(self) -> Client:
-        if self._sdk_client is not None:
-            return self._sdk_client
+        reply = accumulator.reply()
+        if reply is None:
+            raise RuntimeError("A2A send_message returned no response")
+        return reply
+
+    async def _get_sdk_client(self, *, streaming: bool) -> Client:
+        cached_client = self._sdk_clients.get(streaming)
+        if cached_client is not None:
+            return cached_client
 
         httpx_client = self._httpx_client()
         config = ClientConfig(
-            streaming=False,
+            streaming=streaming,
+            polling=False,
             httpx_client=httpx_client,
             supported_protocol_bindings=[TransportProtocol.JSONRPC],
             accepted_output_modes=["text/plain"],
         )
         factory = ClientFactory(config)
         card = await self._fetch_agent_card(httpx_client)
-        self._sdk_client = factory.create(card)
-        return self._sdk_client
+        sdk_client = factory.create(card)
+        self._sdk_clients[streaming] = sdk_client
+        return sdk_client
 
     async def _fetch_agent_card(self, httpx_client: httpx.AsyncClient):
-        response = await httpx_client.get(self._agent_card_url)
+        response = await asyncio.wait_for(
+            httpx_client.get(self._agent_card_url),
+            timeout=self._timeout_seconds,
+        )
         response.raise_for_status()
         card = response.json()
         if not isinstance(card, dict):
@@ -86,11 +122,195 @@ class A2AClient:
         if self._client is not None:
             client = self._client
         else:
-            client = httpx.AsyncClient(timeout=self._timeout_seconds)
+            timeout = httpx.Timeout(
+                connect=self._timeout_seconds,
+                read=None,
+                write=self._timeout_seconds,
+                pool=self._timeout_seconds,
+            )
+            client = httpx.AsyncClient(timeout=timeout)
             self._client = client
         if self._bearer_token:
             client.headers["Authorization"] = f"Bearer {self._bearer_token}"
         return client
+
+    async def _iter_events_with_timeouts(
+        self,
+        stream: AsyncIterator[StreamResponse],
+    ) -> AsyncIterator[StreamResponse | None]:
+        started_at = time.monotonic()
+        last_activity_at = started_at
+        total_timeout = _positive_float_or_none(self._timeout_seconds)
+        idle_timeout = _positive_float_or_none(self._stream_idle_timeout_seconds)
+        heartbeat_interval = _positive_float_or_none(self._stream_heartbeat_interval_seconds)
+        stream_iter = _iter_stream_events_with_heartbeat(
+            stream,
+            heartbeat_interval_seconds=heartbeat_interval or 0.0,
+        ).__aiter__()
+
+        while True:
+            now = time.monotonic()
+            if total_timeout is not None and (now - started_at) >= (total_timeout - 1e-9):
+                raise TimeoutError(f"A2A stream total timeout after {total_timeout:.1f}s")
+
+            wait_timeout = _next_wait_timeout(
+                now=now,
+                started_at=started_at,
+                last_activity_at=last_activity_at,
+                total_timeout=total_timeout,
+                idle_timeout=idle_timeout,
+            )
+            try:
+                if wait_timeout is None:
+                    event = await anext(stream_iter)
+                else:
+                    event = await asyncio.wait_for(anext(stream_iter), timeout=wait_timeout)
+            except StopAsyncIteration:
+                return
+            except TimeoutError as exc:
+                elapsed = time.monotonic() - started_at
+                if total_timeout is not None and elapsed >= (total_timeout - 1e-9):
+                    raise TimeoutError(
+                        f"A2A stream total timeout after {total_timeout:.1f}s"
+                    ) from exc
+                idle_value = idle_timeout if idle_timeout is not None else 0.0
+                raise TimeoutError(f"A2A stream idle timeout after {idle_value:.1f}s") from exc
+
+            last_activity_at = time.monotonic()
+            yield event
+
+
+class _StreamAccumulator:
+    def __init__(self) -> None:
+        self._chunks: list[str] = []
+        self._final_text: str | None = None
+        self.context_id: str | None = None
+        self.task_id: str | None = None
+        self.state: str | None = None
+
+    def consume(self, response: StreamResponse) -> None:
+        if response.HasField("task"):
+            self._consume_task(response.task)
+            return
+        if response.HasField("message"):
+            self._consume_message_response(response)
+            return
+        if response.HasField("artifact_update"):
+            self._consume_artifact_update_response(response)
+            return
+        if response.HasField("status_update"):
+            self._consume_status_update_response(response)
+            return
+        raise RuntimeError(f"unexpected A2A response shape: {response!r}")
+
+    def reply(self) -> A2AReply | None:
+        text = self._final_text if self._final_text is not None else "\n".join(self._chunks)
+        if not text and not (self.context_id or self.task_id or self.state):
+            return None
+        return A2AReply(
+            text=text,
+            context_id=self.context_id,
+            task_id=self.task_id,
+            state=self.state,
+        )
+
+    def _consume_task(self, task: Task) -> None:
+        reply = _reply_from_task(task)
+        self._final_text = reply.text
+        self.context_id = reply.context_id or self.context_id
+        self.task_id = reply.task_id or self.task_id
+        self.state = reply.state or self.state
+
+    def _consume_message_response(self, response: StreamResponse) -> None:
+        reply = _reply_from_stream_response(response)
+        if reply.text:
+            self._chunks.append(reply.text)
+        self.context_id = reply.context_id or self.context_id
+        self.task_id = reply.task_id or self.task_id
+        self.state = reply.state or self.state
+
+    def _consume_artifact_update_response(self, response: StreamResponse) -> None:
+        update = response.artifact_update
+        text = _extract_text(update.artifact.parts)
+        if text:
+            self._chunks.append(text)
+        self.context_id = update.context_id or self.context_id
+        self.task_id = update.task_id or self.task_id
+
+    def _consume_status_update_response(self, response: StreamResponse) -> None:
+        update = response.status_update
+        text = ""
+        if update.status.HasField("message"):
+            text = _extract_text(update.status.message.parts)
+        if text:
+            self._chunks.append(text)
+        self.context_id = update.context_id or self.context_id
+        self.task_id = update.task_id or self.task_id
+        self.state = _task_state_to_text(update.status.state) or self.state
+
+
+async def _iter_stream_events_with_heartbeat(
+    stream: AsyncIterator[StreamResponse],
+    *,
+    heartbeat_interval_seconds: float,
+) -> AsyncIterator[StreamResponse | None]:
+    stream_iter = stream.__aiter__()
+
+    async def _next_stream_event() -> StreamResponse:
+        return await stream_iter.__anext__()
+
+    next_event_task = asyncio.create_task(_next_stream_event())
+    try:
+        while True:
+            if heartbeat_interval_seconds > 0:
+                done, _ = await asyncio.wait(
+                    {next_event_task},
+                    timeout=heartbeat_interval_seconds,
+                )
+                if not done:
+                    yield None
+                    continue
+            else:
+                await next_event_task
+
+            try:
+                event = next_event_task.result()
+            except StopAsyncIteration:
+                return
+
+            next_event_task = asyncio.create_task(_next_stream_event())
+            yield event
+    finally:
+        if not next_event_task.done():
+            next_event_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await next_event_task
+        else:
+            with suppress(StopAsyncIteration, asyncio.CancelledError):
+                next_event_task.result()
+
+
+def _positive_float_or_none(value: float) -> float | None:
+    return float(value) if value > 0 else None
+
+
+def _next_wait_timeout(
+    *,
+    now: float,
+    started_at: float,
+    last_activity_at: float,
+    total_timeout: float | None,
+    idle_timeout: float | None,
+) -> float | None:
+    wait_timeout = None
+    if idle_timeout is not None:
+        wait_timeout = max(idle_timeout - (now - last_activity_at), 0.0)
+    if total_timeout is not None:
+        remaining_total = max(total_timeout - (now - started_at), 0.0)
+        wait_timeout = (
+            min(wait_timeout, remaining_total) if wait_timeout is not None else remaining_total
+        )
+    return wait_timeout
 
 
 def _reply_from_stream_response(response: StreamResponse) -> A2AReply:
