@@ -17,9 +17,7 @@ class Settings(BaseSettings):
     upstream_a2a_card_url: AnyHttpUrl
     upstream_a2a_bearer_token: str | None = None
     upstream_a2a_timeout_seconds: float = Field(default=300.0, gt=0)
-    upstream_a2a_streaming_enabled: bool = True
     upstream_a2a_stream_idle_timeout_seconds: float = Field(default=60.0, ge=0)
-    upstream_a2a_stream_heartbeat_interval_seconds: float = Field(default=15.0, ge=0)
     conversation_state_path: Path = Field(default_factory=default_conversation_state_path)
     wechat_reply_max_chars: int = Field(default=2000, gt=0)
     wechat_split_multiline_messages: bool = False

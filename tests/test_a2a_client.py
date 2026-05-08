@@ -262,7 +262,6 @@ async def test_streaming_turn_is_not_cut_off_by_request_timeout() -> None:
             agent_card_url=AGENT_CARD_URL,
             timeout_seconds=0.01,
             stream_idle_timeout_seconds=1.0,
-            stream_heartbeat_interval_seconds=0.001,
             client=http_client,
         )
         reply = await client.send_message(text="hello")

@@ -15,6 +15,7 @@ from a2a.client.client_factory import TransportProtocol
 from a2a.types import Part, Role, SendMessageRequest, StreamResponse, Task, TaskState
 
 logger = logging.getLogger(__name__)
+STREAM_HEARTBEAT_INTERVAL_SECONDS = 15.0
 
 TURN_TERMINAL_STATES = frozenset(
     {
@@ -49,19 +50,15 @@ class A2AClient:
         agent_card_url: str,
         bearer_token: str | None = None,
         timeout_seconds: float = 300.0,
-        streaming_enabled: bool = True,
         stream_idle_timeout_seconds: float = 60.0,
-        stream_heartbeat_interval_seconds: float = 15.0,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._agent_card_url = agent_card_url
         self._bearer_token = bearer_token
         self._timeout_seconds = timeout_seconds
-        self._streaming_enabled = streaming_enabled
         self._stream_idle_timeout_seconds = stream_idle_timeout_seconds
-        self._stream_heartbeat_interval_seconds = stream_heartbeat_interval_seconds
         self._client = client
-        self._sdk_clients: dict[bool, _SDKClientEntry] = {}
+        self._sdk_client: _SDKClientEntry | None = None
 
     async def send_message(
         self,
@@ -70,7 +67,7 @@ class A2AClient:
         context_id: str | None = None,
         task_id: str | None = None,
     ) -> A2AReply:
-        sdk_client = await self._get_sdk_client(streaming=self._streaming_enabled)
+        sdk_client = await self._get_sdk_client()
         request = SendMessageRequest()
         request.message.message_id = uuid4().hex
         request.message.role = Role.ROLE_USER
@@ -97,14 +94,13 @@ class A2AClient:
             raise RuntimeError("A2A send_message returned no response")
         return reply
 
-    async def _get_sdk_client(self, *, streaming: bool) -> _SDKClientEntry:
-        cached_client = self._sdk_clients.get(streaming)
-        if cached_client is not None:
-            return cached_client
+    async def _get_sdk_client(self) -> _SDKClientEntry:
+        if self._sdk_client is not None:
+            return self._sdk_client
 
         httpx_client = self._httpx_client()
         config = ClientConfig(
-            streaming=streaming,
+            streaming=True,
             polling=False,
             httpx_client=httpx_client,
             supported_protocol_bindings=[TransportProtocol.JSONRPC],
@@ -114,9 +110,9 @@ class A2AClient:
         card = await self._fetch_agent_card(httpx_client)
         entry = _SDKClientEntry(
             client=factory.create(card),
-            streaming=streaming and bool(card.capabilities.streaming),
+            streaming=bool(card.capabilities.streaming),
         )
-        self._sdk_clients[streaming] = entry
+        self._sdk_client = entry
         return entry
 
     async def _fetch_agent_card(self, httpx_client: httpx.AsyncClient):
@@ -158,9 +154,7 @@ class A2AClient:
         idle_timeout = (
             _positive_float_or_none(self._stream_idle_timeout_seconds) if streaming else None
         )
-        heartbeat_interval = (
-            _positive_float_or_none(self._stream_heartbeat_interval_seconds) if streaming else None
-        )
+        heartbeat_interval = STREAM_HEARTBEAT_INTERVAL_SECONDS if streaming else None
         stream_iter = _iter_stream_events_with_heartbeat(
             stream,
             heartbeat_interval_seconds=heartbeat_interval or 0.0,

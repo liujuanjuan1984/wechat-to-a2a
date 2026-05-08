@@ -82,11 +82,7 @@ def main(argv: list[str] | None = None) -> int:
             agent_card_url=settings.upstream_a2a_card_url_value,
             bearer_token=settings.upstream_a2a_bearer_token,
             timeout_seconds=settings.upstream_a2a_timeout_seconds,
-            streaming_enabled=settings.upstream_a2a_streaming_enabled,
             stream_idle_timeout_seconds=settings.upstream_a2a_stream_idle_timeout_seconds,
-            stream_heartbeat_interval_seconds=(
-                settings.upstream_a2a_stream_heartbeat_interval_seconds
-            ),
         )
         gateway = WeChatA2AGateway(
             a2a_client=a2a_client,
