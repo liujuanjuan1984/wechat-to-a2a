@@ -85,6 +85,9 @@ def create_app(settings: Settings, gateway: WeChatA2AGateway | None = None) -> F
         except RuntimeError as exc:
             logger.warning("upstream A2A response failed: %s", exc)
             reply = "The upstream A2A agent returned an invalid response."
+        except Exception as exc:
+            logger.warning("upstream A2A handling failed: %s", exc)
+            reply = "The upstream A2A agent is unavailable."
         else:
             reply = gateway_reply.text
 

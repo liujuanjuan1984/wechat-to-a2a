@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-import itertools
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any
+from uuid import uuid4
 
 import httpx
+from a2a.client import Client, ClientConfig, ClientFactory, minimal_agent_card
+from a2a.client.card_resolver import parse_agent_card
+from a2a.client.client_factory import TransportProtocol
+from a2a.types import Part, Role, SendMessageRequest, StreamResponse, Task, TaskState
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +34,7 @@ class A2AClient:
         self._bearer_token = bearer_token
         self._timeout_seconds = timeout_seconds
         self._client = client
+        self._sdk_client: Client | None = None
         if not self._endpoint and not self._agent_card_url:
             raise ValueError("agent_card_url or endpoint is required")
 
@@ -40,135 +45,108 @@ class A2AClient:
         context_id: str | None = None,
         task_id: str | None = None,
     ) -> A2AReply:
-        endpoint = await self._resolve_endpoint()
-        headers = self._headers(content_type="application/json")
-
-        message: dict[str, Any] = {
-            "role": "user",
-            "parts": [{"type": "text", "text": text}],
-        }
+        sdk_client = await self._get_sdk_client()
+        request = SendMessageRequest()
+        request.message.message_id = uuid4().hex
+        request.message.role = Role.ROLE_USER
+        request.message.parts.append(Part(text=text))
         if context_id:
-            message["contextId"] = context_id
+            request.message.context_id = context_id
         if task_id:
-            message["taskId"] = task_id
+            request.message.task_id = task_id
 
-        payload = {
-            "jsonrpc": "2.0",
-            "id": "wechat-to-a2a",
-            "method": "SendMessage",
-            "params": {"message": message},
-        }
+        latest: StreamResponse | None = None
+        async for event in sdk_client.send_message(request):
+            latest = event
+        if latest is None:
+            raise RuntimeError("A2A send_message returned no response")
+        return _reply_from_stream_response(latest)
 
-        if self._client is not None:
-            response = await self._client.post(endpoint, json=payload, headers=headers)
-        else:
-            async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
-                response = await client.post(endpoint, json=payload, headers=headers)
-        response.raise_for_status()
-        body = response.json()
-        if "error" in body:
-            raise RuntimeError(f"A2A JSON-RPC error: {body['error']!r}")
-        result = body.get("result")
-        if not isinstance(result, dict):
-            raise RuntimeError(f"unexpected A2A response shape: {body!r}")
-        return _reply_from_task(result)
+    async def _get_sdk_client(self) -> Client:
+        if self._sdk_client is not None:
+            return self._sdk_client
 
-    async def _resolve_endpoint(self) -> str:
+        httpx_client = self._httpx_client()
+        config = ClientConfig(
+            streaming=False,
+            httpx_client=httpx_client,
+            supported_protocol_bindings=[TransportProtocol.JSONRPC],
+            accepted_output_modes=["text/plain"],
+        )
+        factory = ClientFactory(config)
         if self._endpoint:
-            return self._endpoint
-        assert self._agent_card_url is not None
-        if self._client is not None:
-            response = await self._client.get(
-                self._agent_card_url,
-                headers=self._headers(),
-            )
+            card = minimal_agent_card(self._endpoint, [TransportProtocol.JSONRPC])
         else:
-            async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
-                response = await client.get(
-                    self._agent_card_url,
-                    headers=self._headers(),
-                )
+            card = await self._fetch_agent_card(httpx_client)
+        self._sdk_client = factory.create(card)
+        return self._sdk_client
+
+    async def _fetch_agent_card(self, httpx_client: httpx.AsyncClient):
+        assert self._agent_card_url is not None
+        response = await httpx_client.get(self._agent_card_url)
         response.raise_for_status()
         card = response.json()
         if not isinstance(card, dict):
             raise RuntimeError(f"unexpected A2A agent card shape: {card!r}")
-        endpoint = _endpoint_from_agent_card(card)
-        if not endpoint:
-            raise RuntimeError(f"A2A agent card missing JSON-RPC endpoint: {card!r}")
-        self._endpoint = endpoint
-        return endpoint
+        return parse_agent_card(card)
 
-    def _headers(self, *, content_type: str | None = None) -> dict[str, str]:
-        headers: dict[str, str] = {}
-        if content_type:
-            headers["Content-Type"] = content_type
+    def _httpx_client(self) -> httpx.AsyncClient:
+        if self._client is not None:
+            client = self._client
+        else:
+            client = httpx.AsyncClient(timeout=self._timeout_seconds)
+            self._client = client
         if self._bearer_token:
-            headers["Authorization"] = f"Bearer {self._bearer_token}"
-        return headers
+            client.headers["Authorization"] = f"Bearer {self._bearer_token}"
+        return client
 
 
-def _reply_from_task(task: dict[str, Any]) -> A2AReply:
-    context_id = _optional_str(task.get("contextId"))
-    task_id = _optional_str(task.get("id") or task.get("taskId"))
-    status = task.get("status") if isinstance(task.get("status"), dict) else {}
-    state = _optional_str(status.get("state")) if isinstance(status, dict) else None
-
-    artifact_parts = list(
-        itertools.chain.from_iterable(
-            artifact.get("parts", [])
-            for artifact in task.get("artifacts", [])
-            if isinstance(artifact, dict)
+def _reply_from_stream_response(response: StreamResponse) -> A2AReply:
+    if response.HasField("task"):
+        return _reply_from_task(response.task)
+    if response.HasField("message"):
+        return A2AReply(
+            text=_extract_text(response.message.parts),
+            context_id=response.message.context_id or None,
+            task_id=response.message.task_id or None,
+            state=None,
         )
-    )
+    raise RuntimeError(f"unexpected A2A response shape: {response!r}")
+
+
+def _reply_from_task(task: Task) -> A2AReply:
+    artifact_parts = [part for artifact in task.artifacts for part in artifact.parts]
     text = _extract_text(artifact_parts)
-    if not text and isinstance(status, dict):
-        message = status.get("message")
-        if isinstance(message, dict):
-            text = _extract_text(message.get("parts", []))
-    return A2AReply(text=text, context_id=context_id, task_id=task_id, state=state)
+    if not text and task.status.HasField("message"):
+        text = _extract_text(task.status.message.parts)
+    return A2AReply(
+        text=text,
+        context_id=task.context_id or None,
+        task_id=task.id or None,
+        state=_task_state_to_text(task.status.state),
+    )
 
 
-def _extract_text(parts: object) -> str:
-    if not isinstance(parts, list):
-        return ""
-    chunks = [
-        part.get("text", "")
-        for part in parts
-        if isinstance(part, dict)
-        and part.get("type") == "text"
-        and isinstance(part.get("text"), str)
-    ]
-    return "\n".join(chunk for chunk in chunks if chunk)
+def _extract_text(parts: Iterable[Part]) -> str:
+    chunks = [part.text for part in parts if part.text]
+    return "\n".join(chunks)
 
 
-def _optional_str(value: object) -> str | None:
-    return value if isinstance(value, str) else None
-
-
-def _endpoint_from_agent_card(card: dict[str, Any]) -> str | None:
-    endpoint = _optional_str(card.get("url"))
-    if endpoint:
-        return endpoint
-
-    supported_interfaces = card.get("supportedInterfaces")
-    if not isinstance(supported_interfaces, list):
-        return None
-
-    fallback_endpoint: str | None = None
-    for item in supported_interfaces:
-        if not isinstance(item, dict):
-            continue
-        interface_endpoint = _optional_str(item.get("url"))
-        if not interface_endpoint:
-            continue
-        if fallback_endpoint is None:
-            fallback_endpoint = interface_endpoint
-        protocol_binding = _optional_str(item.get("protocolBinding"))
-        if protocol_binding and _is_jsonrpc_binding(protocol_binding):
-            return interface_endpoint
-    return fallback_endpoint
-
-
-def _is_jsonrpc_binding(value: str) -> bool:
-    normalized = value.replace("-", "").replace("_", "").lower()
-    return normalized == "jsonrpc"
+def _task_state_to_text(state: int) -> str | None:
+    if state == TaskState.TASK_STATE_COMPLETED:
+        return "completed"
+    if state == TaskState.TASK_STATE_INPUT_REQUIRED:
+        return "input-required"
+    if state == TaskState.TASK_STATE_AUTH_REQUIRED:
+        return "auth-required"
+    if state == TaskState.TASK_STATE_WORKING:
+        return "working"
+    if state == TaskState.TASK_STATE_SUBMITTED:
+        return "submitted"
+    if state == TaskState.TASK_STATE_FAILED:
+        return "failed"
+    if state == TaskState.TASK_STATE_CANCELED:
+        return "canceled"
+    if state == TaskState.TASK_STATE_REJECTED:
+        return "rejected"
+    return None
