@@ -42,6 +42,32 @@ async def test_send_message_extracts_artifact_text_and_context() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_message_includes_context_and_task_for_continuation() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = request.read()
+        assert b'"contextId":"ctx-1"' in payload
+        assert b'"taskId":"task-1"' in payload
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": "wechat-to-a2a",
+                "result": {
+                    "id": "task-1",
+                    "contextId": "ctx-1",
+                    "status": {"state": "completed"},
+                    "artifacts": [],
+                },
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = A2AClient(endpoint="https://agent.example/a2a", client=http_client)
+        await client.send_message(text="details", context_id="ctx-1", task_id="task-1")
+
+
+@pytest.mark.asyncio
 async def test_send_message_raises_on_jsonrpc_error() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

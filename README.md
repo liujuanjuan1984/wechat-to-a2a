@@ -8,13 +8,33 @@ agent with JSON-RPC `SendMessage`, and returns the agent reply to WeChat.
 
 ## Status
 
-Early scaffold. The current implementation supports:
+Early gateway. The current implementation supports:
 
 - WeChat Official Account webhook signature verification
 - WeChat text-message XML parsing and text replies
-- Per-WeChat-user A2A `contextId` mapping
+- Per-WeChat-account/user A2A conversation state
+- A2A `contextId` reuse across WeChat messages
+- A2A `taskId` continuation for `input-required`, `auth-required`, and `working` tasks
+- Optional JSON conversation-state persistence
+- WeChat-oriented text formatting and reply chunking
 - Bearer-token authentication for upstream A2A agents
 - FastAPI app and `wechat-to-a2a serve` CLI
+
+## How It Works
+
+`wechat-to-a2a` exposes a WeChat Official Account callback endpoint and forwards
+each inbound text message to the configured A2A JSON-RPC endpoint with
+`SendMessage`. It keys conversation state by WeChat account and user, then stores
+the upstream A2A `contextId` so later WeChat messages continue the same A2A
+conversation.
+
+When an A2A service returns a non-terminal task state such as `input-required`,
+the gateway also stores the returned `taskId` and sends the next WeChat message
+back with both `contextId` and `taskId`. Once the task completes, the `taskId` is
+cleared while the `contextId` remains available for future turns.
+
+The gateway does not expose WeChat as an A2A service. It is a WeChat entrypoint
+for any compatible upstream A2A service.
 
 ## Quick Start
 
@@ -24,6 +44,7 @@ uv sync --all-extras
 export WECHAT_TO_A2A_WECHAT_TOKEN="wechat-callback-token"
 export WECHAT_TO_A2A_A2A_URL="http://127.0.0.1:8080/"
 export WECHAT_TO_A2A_A2A_BEARER_TOKEN="optional-upstream-token"
+export WECHAT_TO_A2A_CONVERSATION_STATE_PATH=".state/conversations.json"
 
 uv run wechat-to-a2a serve --host 127.0.0.1 --port 8000
 ```
@@ -51,6 +72,9 @@ Environment variables use the `WECHAT_TO_A2A_` prefix.
 | `WECHAT_TO_A2A_A2A_URL` | Yes | Upstream A2A JSON-RPC endpoint URL |
 | `WECHAT_TO_A2A_A2A_BEARER_TOKEN` | No | Bearer token sent to the upstream A2A agent |
 | `WECHAT_TO_A2A_A2A_TIMEOUT_SECONDS` | No | A2A request timeout, default `30` |
+| `WECHAT_TO_A2A_CONVERSATION_STATE_PATH` | No | JSON file used to persist WeChat-to-A2A conversation state |
+| `WECHAT_TO_A2A_WECHAT_REPLY_MAX_CHARS` | No | Maximum text characters per WeChat reply chunk, default `2000` |
+| `WECHAT_TO_A2A_WECHAT_SPLIT_MULTILINE_MESSAGES` | No | Split short multiline replies into separate chunks before joining, default `false` |
 
 ## License
 

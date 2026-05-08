@@ -6,15 +6,28 @@ import httpx
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 
 from .a2a_client import A2AClient
+from .conversation import ConversationStore
+from .gateway import WeChatA2AGateway
 from .settings import Settings
 from .wechat import parse_message_xml, render_text_reply, verify_signature
 
 logger = logging.getLogger(__name__)
 
 
-def create_app(settings: Settings) -> FastAPI:
+def create_app(settings: Settings, gateway: WeChatA2AGateway | None = None) -> FastAPI:
     app = FastAPI(title="wechat-to-a2a", version="0.1.0")
-    context_by_user: dict[str, str] = {}
+    if gateway is None:
+        client = A2AClient(
+            endpoint=settings.a2a_endpoint,
+            bearer_token=settings.a2a_bearer_token,
+            timeout_seconds=settings.a2a_timeout_seconds,
+        )
+        gateway = WeChatA2AGateway(
+            a2a_client=client,
+            conversation_store=ConversationStore(settings.conversation_state_path),
+            reply_max_chars=settings.wechat_reply_max_chars,
+            split_multiline_messages=settings.wechat_split_multiline_messages,
+        )
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -61,16 +74,8 @@ def create_app(settings: Settings) -> FastAPI:
                 content=reply,
             )
 
-        client = A2AClient(
-            endpoint=settings.a2a_endpoint,
-            bearer_token=settings.a2a_bearer_token,
-            timeout_seconds=settings.a2a_timeout_seconds,
-        )
         try:
-            a2a_reply = await client.send_message(
-                text=message.content,
-                context_id=context_by_user.get(message.from_user),
-            )
+            gateway_reply = await gateway.handle_message(message)
         except httpx.HTTPError as exc:
             logger.warning("upstream A2A request failed: %s", exc)
             reply = "The upstream A2A agent is unavailable."
@@ -78,9 +83,7 @@ def create_app(settings: Settings) -> FastAPI:
             logger.warning("upstream A2A response failed: %s", exc)
             reply = "The upstream A2A agent returned an invalid response."
         else:
-            if a2a_reply.context_id:
-                context_by_user[message.from_user] = a2a_reply.context_id
-            reply = a2a_reply.text or "The upstream A2A agent returned no text."
+            reply = gateway_reply.text
 
         return _wechat_xml_response(
             to_user=message.from_user,

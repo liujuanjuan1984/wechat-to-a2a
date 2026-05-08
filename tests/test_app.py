@@ -51,10 +51,10 @@ def test_get_wechat_verification_rejects_invalid_signature() -> None:
 
 
 def test_post_text_message_forwards_to_a2a(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[str, str | None]] = []
+    calls: list[tuple[str, str | None, str | None]] = []
 
     async def fake_send_message(self, *, text: str, context_id: str | None = None, task_id=None):
-        calls.append((text, context_id))
+        calls.append((text, context_id, task_id))
         return A2AReply(
             text="agent reply", context_id="ctx-user", task_id="task-1", state="completed"
         )
@@ -77,7 +77,7 @@ def test_post_text_message_forwards_to_a2a(monkeypatch: pytest.MonkeyPatch) -> N
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert calls == [("hello", None), ("hello", "ctx-user")]
+    assert calls == [("hello", None, None), ("hello", "ctx-user", None)]
     root = ET.fromstring(first.text)
     assert root.findtext("ToUserName") == "user-1"
     assert root.findtext("FromUserName") == "gh_x"
