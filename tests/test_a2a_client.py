@@ -83,6 +83,57 @@ async def test_send_message_resolves_endpoint_from_agent_card() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_message_resolves_endpoint_from_supported_interfaces() -> None:
+    seen_card_request = False
+    seen_message_request = False
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_card_request, seen_message_request
+        if request.url.path == "/api/a2a/.well-known/agent-card.json":
+            seen_card_request = True
+            return httpx.Response(
+                200,
+                json={
+                    "name": "agent",
+                    "supportedInterfaces": [
+                        {
+                            "url": "https://commons.kalos.art/api/a2a/",
+                            "protocolBinding": "JSONRPC",
+                            "protocolVersion": "1.0",
+                        }
+                    ],
+                },
+            )
+        seen_message_request = True
+        assert str(request.url) == "https://commons.kalos.art/api/a2a/"
+        assert b"SendMessage" in request.read()
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": "wechat-to-a2a",
+                "result": {
+                    "id": "task-1",
+                    "contextId": "ctx-1",
+                    "status": {"state": "completed"},
+                    "artifacts": [],
+                },
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = A2AClient(
+            agent_card_url="https://commons.kalos.art/api/a2a/.well-known/agent-card.json",
+            client=http_client,
+        )
+        await client.send_message(text="hello")
+
+    assert seen_card_request
+    assert seen_message_request
+
+
+@pytest.mark.asyncio
 async def test_send_message_includes_context_and_task_for_continuation() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         payload = request.read()

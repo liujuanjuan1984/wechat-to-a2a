@@ -92,9 +92,9 @@ class A2AClient:
         card = response.json()
         if not isinstance(card, dict):
             raise RuntimeError(f"unexpected A2A agent card shape: {card!r}")
-        endpoint = _optional_str(card.get("url"))
+        endpoint = _endpoint_from_agent_card(card)
         if not endpoint:
-            raise RuntimeError(f"A2A agent card missing url: {card!r}")
+            raise RuntimeError(f"A2A agent card missing JSON-RPC endpoint: {card!r}")
         self._endpoint = endpoint
         return endpoint
 
@@ -143,3 +143,32 @@ def _extract_text(parts: object) -> str:
 
 def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _endpoint_from_agent_card(card: dict[str, Any]) -> str | None:
+    endpoint = _optional_str(card.get("url"))
+    if endpoint:
+        return endpoint
+
+    supported_interfaces = card.get("supportedInterfaces")
+    if not isinstance(supported_interfaces, list):
+        return None
+
+    fallback_endpoint: str | None = None
+    for item in supported_interfaces:
+        if not isinstance(item, dict):
+            continue
+        interface_endpoint = _optional_str(item.get("url"))
+        if not interface_endpoint:
+            continue
+        if fallback_endpoint is None:
+            fallback_endpoint = interface_endpoint
+        protocol_binding = _optional_str(item.get("protocolBinding"))
+        if protocol_binding and _is_jsonrpc_binding(protocol_binding):
+            return interface_endpoint
+    return fallback_endpoint
+
+
+def _is_jsonrpc_binding(value: str) -> bool:
+    normalized = value.replace("-", "").replace("_", "").lower()
+    return normalized == "jsonrpc"

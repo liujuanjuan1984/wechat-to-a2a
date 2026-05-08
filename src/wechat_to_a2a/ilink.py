@@ -325,17 +325,29 @@ class ILinkGatewayRunner:
                 inbound.context_token,
             )
 
-        reply = await self._gateway.handle_message(
-            WeChatMessage(
-                to_user=self._account_id,
-                from_user=inbound.chat_id,
-                create_time=int(time.time()),
-                msg_type="text",
-                content=inbound.text,
-                msg_id=inbound.message_id,
-                gateway="ilink",
+        try:
+            reply = await self._gateway.handle_message(
+                WeChatMessage(
+                    to_user=self._account_id,
+                    from_user=inbound.chat_id,
+                    create_time=int(time.time()),
+                    msg_type="text",
+                    content=inbound.text,
+                    msg_id=inbound.message_id,
+                    gateway="ilink",
+                )
             )
-        )
+        except Exception:
+            logger.exception("upstream A2A handling failed for iLink chat_id=%s", inbound.chat_id)
+            reply = GatewayReply(
+                text="The upstream A2A agent is unavailable.",
+                chunks=["The upstream A2A agent is unavailable."],
+                conversation_key=f"wechat:ilink:{self._account_id}:{inbound.chat_id}",
+                context_id=None,
+                task_id=None,
+            )
+            await self._send_reply(inbound.chat_id, reply)
+            return None
         await self._send_reply(inbound.chat_id, reply)
         return reply
 

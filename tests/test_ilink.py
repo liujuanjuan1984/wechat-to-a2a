@@ -95,11 +95,14 @@ async def test_ilink_client_sends_text_payload() -> None:
 
 
 class FakeGateway:
-    def __init__(self) -> None:
+    def __init__(self, *, fail: bool = False) -> None:
         self.messages = []
+        self.fail = fail
 
     async def handle_message(self, message):
         self.messages.append(message)
+        if self.fail:
+            raise RuntimeError("upstream failed")
         return GatewayReply(
             text="reply",
             chunks=["reply"],
@@ -144,3 +147,30 @@ async def test_ilink_runner_forwards_text_to_a2a_and_replies(tmp_path) -> None:
     assert gateway.messages[0].from_user == "peer"
     assert gateway.messages[0].content == "hi"
     assert ilink_client.sent == [("peer", "reply", "ctx-token", None)]
+
+
+async def test_ilink_runner_reports_upstream_errors_without_raising(tmp_path) -> None:
+    store = ILinkStateStore(tmp_path)
+    gateway = FakeGateway(fail=True)
+    ilink_client = FakeILinkClient()
+    runner = ILinkGatewayRunner(
+        account_id="acct",
+        ilink_client=ilink_client,
+        gateway=gateway,
+        state_store=store,
+        send_chunk_delay_seconds=0,
+    )
+
+    reply = await runner.handle_raw_message(
+        {
+            "from_user_id": "peer",
+            "message_id": "msg-1",
+            "context_token": "ctx-token",
+            "item_list": [{"type": 1, "text_item": {"text": "hi"}}],
+        }
+    )
+
+    assert reply is None
+    assert ilink_client.sent == [
+        ("peer", "The upstream A2A agent is unavailable.", "ctx-token", None)
+    ]
