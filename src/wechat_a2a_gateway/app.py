@@ -21,9 +21,9 @@ def create_app(settings: Settings, gateway: WeChatA2AGateway | None = None) -> F
     app = FastAPI(title="wechat-to-a2a", version="0.1.0")
     if gateway is None:
         client = A2AClient(
-            endpoint=settings.a2a_endpoint,
-            bearer_token=settings.a2a_bearer_token,
-            timeout_seconds=settings.a2a_timeout_seconds,
+            agent_card_url=settings.upstream_a2a_card_endpoint,
+            bearer_token=settings.upstream_a2a_bearer_token,
+            timeout_seconds=settings.upstream_a2a_timeout_seconds,
         )
         gateway = WeChatA2AGateway(
             a2a_client=client,

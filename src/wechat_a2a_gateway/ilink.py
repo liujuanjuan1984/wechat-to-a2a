@@ -456,7 +456,7 @@ def extract_ilink_text(item_list: object) -> str:
 
 
 def default_ilink_state_dir() -> Path:
-    return Path.home() / ".wechat-to-a2a" / "ilink"
+    return Path.home() / ".wechat_to_a2a" / "ilink"
 
 
 def _json_dumps(payload: dict[str, Any]) -> str:

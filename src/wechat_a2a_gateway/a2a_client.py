@@ -19,15 +19,19 @@ class A2AClient:
     def __init__(
         self,
         *,
-        endpoint: str,
+        agent_card_url: str | None = None,
+        endpoint: str | None = None,
         bearer_token: str | None = None,
         timeout_seconds: float = 30.0,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._endpoint = endpoint
+        self._agent_card_url = agent_card_url
         self._bearer_token = bearer_token
         self._timeout_seconds = timeout_seconds
         self._client = client
+        if not self._endpoint and not self._agent_card_url:
+            raise ValueError("agent_card_url or endpoint is required")
 
     async def send_message(
         self,
@@ -36,9 +40,8 @@ class A2AClient:
         context_id: str | None = None,
         task_id: str | None = None,
     ) -> A2AReply:
-        headers = {"Content-Type": "application/json"}
-        if self._bearer_token:
-            headers["Authorization"] = f"Bearer {self._bearer_token}"
+        endpoint = await self._resolve_endpoint()
+        headers = self._headers(content_type="application/json")
 
         message: dict[str, Any] = {
             "role": "user",
@@ -57,10 +60,10 @@ class A2AClient:
         }
 
         if self._client is not None:
-            response = await self._client.post(self._endpoint, json=payload, headers=headers)
+            response = await self._client.post(endpoint, json=payload, headers=headers)
         else:
             async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
-                response = await client.post(self._endpoint, json=payload, headers=headers)
+                response = await client.post(endpoint, json=payload, headers=headers)
         response.raise_for_status()
         body = response.json()
         if "error" in body:
@@ -69,6 +72,39 @@ class A2AClient:
         if not isinstance(result, dict):
             raise RuntimeError(f"unexpected A2A response shape: {body!r}")
         return _reply_from_task(result)
+
+    async def _resolve_endpoint(self) -> str:
+        if self._endpoint:
+            return self._endpoint
+        assert self._agent_card_url is not None
+        if self._client is not None:
+            response = await self._client.get(
+                self._agent_card_url,
+                headers=self._headers(),
+            )
+        else:
+            async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
+                response = await client.get(
+                    self._agent_card_url,
+                    headers=self._headers(),
+                )
+        response.raise_for_status()
+        card = response.json()
+        if not isinstance(card, dict):
+            raise RuntimeError(f"unexpected A2A agent card shape: {card!r}")
+        endpoint = _optional_str(card.get("url"))
+        if not endpoint:
+            raise RuntimeError(f"A2A agent card missing url: {card!r}")
+        self._endpoint = endpoint
+        return endpoint
+
+    def _headers(self, *, content_type: str | None = None) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        if content_type:
+            headers["Content-Type"] = content_type
+        if self._bearer_token:
+            headers["Authorization"] = f"Bearer {self._bearer_token}"
+        return headers
 
 
 def _reply_from_task(task: dict[str, Any]) -> A2AReply:

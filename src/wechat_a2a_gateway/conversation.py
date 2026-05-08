@@ -46,7 +46,10 @@ class ConversationStore:
         self._lock = threading.RLock()
         self._states: dict[str, ConversationState] = {}
         if self._path is not None:
-            self._load()
+            if self._path.exists():
+                self._load()
+            else:
+                self._save()
 
     def get_or_create(
         self,

@@ -21,8 +21,16 @@ def _query(token: str = "secret") -> str:
     return f"signature={_signature(token, timestamp, nonce)}&timestamp={timestamp}&nonce={nonce}"
 
 
-def test_get_wechat_verification_echoes_echostr() -> None:
-    app = create_app(Settings(wechat_token="secret", a2a_url="https://agent.example/a2a"))
+def _settings(tmp_path) -> Settings:
+    return Settings(
+        wechat_token="secret",
+        upstream_a2a_card_url="https://agent.example/.well-known/agent-card.json",
+        conversation_state_path=tmp_path / "conversations.json",
+    )
+
+
+def test_get_wechat_verification_echoes_echostr(tmp_path) -> None:
+    app = create_app(_settings(tmp_path))
     client = TestClient(app)
 
     response = client.get(f"/wechat?{_query()}&echostr=ok")
@@ -31,8 +39,8 @@ def test_get_wechat_verification_echoes_echostr() -> None:
     assert response.text == "ok"
 
 
-def test_health() -> None:
-    app = create_app(Settings(wechat_token="secret", a2a_url="https://agent.example/a2a"))
+def test_health(tmp_path) -> None:
+    app = create_app(_settings(tmp_path))
     client = TestClient(app)
 
     response = client.get("/health")
@@ -43,11 +51,13 @@ def test_health() -> None:
 
 def test_create_app_requires_wechat_token_for_official_mode() -> None:
     with pytest.raises(RuntimeError, match="WECHAT_TO_A2A_WECHAT_TOKEN"):
-        create_app(Settings(a2a_url="https://agent.example/a2a"))
+        create_app(
+            Settings(upstream_a2a_card_url="https://agent.example/.well-known/agent-card.json")
+        )
 
 
-def test_get_wechat_verification_rejects_invalid_signature() -> None:
-    app = create_app(Settings(wechat_token="secret", a2a_url="https://agent.example/a2a"))
+def test_get_wechat_verification_rejects_invalid_signature(tmp_path) -> None:
+    app = create_app(_settings(tmp_path))
     client = TestClient(app)
 
     response = client.get("/wechat?signature=bad&timestamp=123&nonce=abc&echostr=ok")
@@ -55,7 +65,7 @@ def test_get_wechat_verification_rejects_invalid_signature() -> None:
     assert response.status_code == 403
 
 
-def test_post_text_message_forwards_to_a2a(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_post_text_message_forwards_to_a2a(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     calls: list[tuple[str, str | None, str | None]] = []
 
     async def fake_send_message(self, *, text: str, context_id: str | None = None, task_id=None):
@@ -65,7 +75,7 @@ def test_post_text_message_forwards_to_a2a(monkeypatch: pytest.MonkeyPatch) -> N
         )
 
     monkeypatch.setattr("wechat_a2a_gateway.a2a_client.A2AClient.send_message", fake_send_message)
-    app = create_app(Settings(wechat_token="secret", a2a_url="https://agent.example/a2a"))
+    app = create_app(_settings(tmp_path))
     client = TestClient(app)
 
     xml = b"""
@@ -89,8 +99,8 @@ def test_post_text_message_forwards_to_a2a(monkeypatch: pytest.MonkeyPatch) -> N
     assert root.findtext("Content") == "agent reply"
 
 
-def test_post_non_text_message_returns_unsupported_reply() -> None:
-    app = create_app(Settings(wechat_token="secret", a2a_url="https://agent.example/a2a"))
+def test_post_non_text_message_returns_unsupported_reply(tmp_path) -> None:
+    app = create_app(_settings(tmp_path))
     client = TestClient(app)
 
     xml = b"""

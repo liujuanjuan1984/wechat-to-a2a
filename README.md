@@ -31,10 +31,11 @@ Early gateway. The current implementation supports:
 - `serve`: WeChat Official Account webhook mode for deployments that already
   have a public HTTPS callback URL.
 
-Both modes forward each inbound text message to the configured A2A JSON-RPC
-endpoint with `SendMessage`. The gateway keys conversation state by WeChat
-gateway/account/user, then stores the upstream A2A `contextId` so later WeChat
-messages continue the same A2A conversation.
+Both modes fetch the configured upstream A2A Agent Card, read its `url` field as
+the JSON-RPC endpoint, and forward each inbound text message with `SendMessage`.
+The gateway keys conversation state by WeChat gateway/account/user, then stores
+the upstream A2A `contextId` so later WeChat messages continue the same A2A
+conversation.
 
 When an A2A service returns a non-terminal task state such as `input-required`,
 the gateway also stores the returned `taskId` and sends the next WeChat message
@@ -53,13 +54,12 @@ uv sync --all-extras
 uv run wechat-to-a2a ilink-login
 ```
 
-The login stores iLink credentials under `~/.wechat-to-a2a/ilink` by default.
-Then run the gateway against any A2A endpoint:
+The login stores iLink credentials under `~/.wechat_to_a2a/ilink` by default.
+Then run the gateway against any upstream A2A Agent Card:
 
 ```bash
-export WECHAT_TO_A2A_A2A_URL="http://127.0.0.1:8080/"
-export WECHAT_TO_A2A_A2A_BEARER_TOKEN="optional-upstream-token"
-export WECHAT_TO_A2A_CONVERSATION_STATE_PATH=".state/conversations.json"
+export WECHAT_TO_A2A_UPSTREAM_A2A_CARD_URL="http://127.0.0.1:8080/.well-known/agent-card.json"
+export WECHAT_TO_A2A_UPSTREAM_A2A_BEARER_TOKEN="optional-upstream-token"
 
 uv run wechat-to-a2a ilink-run
 ```
@@ -73,15 +73,20 @@ export WECHAT_TO_A2A_ILINK_BASE_URL="https://ilinkai.weixin.qq.com"
 uv run wechat-to-a2a ilink-run
 ```
 
+Conversation state is created automatically at:
+
+```text
+~/.wechat_to_a2a/conversations.json
+```
+
 ## Official Account Quick Start
 
 ```bash
 uv sync --all-extras
 
 export WECHAT_TO_A2A_WECHAT_TOKEN="wechat-callback-token"
-export WECHAT_TO_A2A_A2A_URL="http://127.0.0.1:8080/"
-export WECHAT_TO_A2A_A2A_BEARER_TOKEN="optional-upstream-token"
-export WECHAT_TO_A2A_CONVERSATION_STATE_PATH=".state/conversations.json"
+export WECHAT_TO_A2A_UPSTREAM_A2A_CARD_URL="http://127.0.0.1:8080/.well-known/agent-card.json"
+export WECHAT_TO_A2A_UPSTREAM_A2A_BEARER_TOKEN="optional-upstream-token"
 
 uv run wechat-to-a2a serve --host 127.0.0.1 --port 8000
 ```
@@ -105,11 +110,11 @@ Environment variables use the `WECHAT_TO_A2A_` prefix.
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `WECHAT_TO_A2A_WECHAT_TOKEN` | Yes | Token configured in WeChat Official Account callback settings |
-| `WECHAT_TO_A2A_A2A_URL` | Yes | Upstream A2A JSON-RPC endpoint URL |
-| `WECHAT_TO_A2A_A2A_BEARER_TOKEN` | No | Bearer token sent to the upstream A2A agent |
-| `WECHAT_TO_A2A_A2A_TIMEOUT_SECONDS` | No | A2A request timeout, default `30` |
-| `WECHAT_TO_A2A_CONVERSATION_STATE_PATH` | No | JSON file used to persist WeChat-to-A2A conversation state |
+| `WECHAT_TO_A2A_WECHAT_TOKEN` | Official mode only | Token configured in WeChat Official Account callback settings |
+| `WECHAT_TO_A2A_UPSTREAM_A2A_CARD_URL` | Yes | Upstream A2A Agent Card URL; the card `url` field is used as the JSON-RPC endpoint |
+| `WECHAT_TO_A2A_UPSTREAM_A2A_BEARER_TOKEN` | No | Bearer token sent when fetching the Agent Card and calling the upstream A2A endpoint |
+| `WECHAT_TO_A2A_UPSTREAM_A2A_TIMEOUT_SECONDS` | No | A2A card fetch and request timeout, default `30` |
+| `WECHAT_TO_A2A_CONVERSATION_STATE_PATH` | No | JSON file used to persist WeChat-to-A2A conversation state, default `~/.wechat_to_a2a/conversations.json` |
 | `WECHAT_TO_A2A_WECHAT_REPLY_MAX_CHARS` | No | Maximum text characters per WeChat reply chunk, default `2000` |
 | `WECHAT_TO_A2A_WECHAT_SPLIT_MULTILINE_MESSAGES` | No | Split short multiline replies into separate chunks before joining, default `false` |
 | `WECHAT_TO_A2A_ILINK_ACCOUNT_ID` | No | iLink account ID for `ilink-run`; inferred from saved login when possible |
