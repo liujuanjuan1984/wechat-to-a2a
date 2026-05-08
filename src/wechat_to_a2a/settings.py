@@ -22,5 +22,5 @@ class Settings(BaseSettings):
     wechat_split_multiline_messages: bool = False
 
     @property
-    def upstream_a2a_card_endpoint(self) -> str:
+    def upstream_a2a_card_url_value(self) -> str:
         return str(self.upstream_a2a_card_url)

@@ -1,6 +1,6 @@
 # wechat-to-a2a
 
-A WeChat gateway for chatting with any A2A-compatible agent.
+A WeChat gateway for chatting with any A2A 1.0-compatible agent.
 
 This project is intentionally a gateway, not a WeChat-as-A2A service. It accepts
 WeChat messages, forwards user text to an upstream A2A agent with JSON-RPC
@@ -31,11 +31,11 @@ Early gateway. The current implementation supports:
 - `serve`: WeChat Official Account webhook mode for deployments that already
   have a public HTTPS callback URL.
 
-Both modes fetch the configured upstream A2A Agent Card, read its `url` field as
-the JSON-RPC endpoint, and forward each inbound text message with `SendMessage`.
-The gateway keys conversation state by WeChat gateway/account/user, then stores
-the upstream A2A `contextId` so later WeChat messages continue the same A2A
-conversation.
+Both modes fetch the configured upstream A2A 1.0 Agent Card, let `a2a-sdk`
+resolve the JSON-RPC endpoint from the card's advertised interfaces, and
+forward each inbound text message with `SendMessage`. The gateway keys
+conversation state by WeChat gateway/account/user, then stores the upstream A2A
+`contextId` so later WeChat messages continue the same A2A conversation.
 
 When an A2A service returns a non-terminal task state such as `input-required`,
 the gateway also stores the returned `taskId` and sends the next WeChat message
@@ -43,7 +43,7 @@ back with both `contextId` and `taskId`. Once the task completes, the `taskId` i
 cleared while the `contextId` remains available for future turns.
 
 The gateway does not expose WeChat as an A2A service. It is a WeChat entrypoint
-for any compatible upstream A2A service.
+for any A2A 1.0-compatible upstream service.
 
 ## iLink Quick Start
 
@@ -111,7 +111,7 @@ Environment variables use the `WECHAT_TO_A2A_` prefix.
 | Variable | Required | Description |
 | --- | --- | --- |
 | `WECHAT_TO_A2A_WECHAT_TOKEN` | Official mode only | Token configured in WeChat Official Account callback settings |
-| `WECHAT_TO_A2A_UPSTREAM_A2A_CARD_URL` | Yes | Upstream A2A Agent Card URL; the card `url` field is used as the JSON-RPC endpoint |
+| `WECHAT_TO_A2A_UPSTREAM_A2A_CARD_URL` | Yes | Upstream A2A 1.0 Agent Card URL; the SDK resolves the JSON-RPC endpoint from the card's advertised interfaces |
 | `WECHAT_TO_A2A_UPSTREAM_A2A_BEARER_TOKEN` | No | Bearer token sent when fetching the Agent Card and calling the upstream A2A endpoint |
 | `WECHAT_TO_A2A_UPSTREAM_A2A_TIMEOUT_SECONDS` | No | A2A card fetch and request timeout, default `30` |
 | `WECHAT_TO_A2A_CONVERSATION_STATE_PATH` | No | JSON file used to persist WeChat-to-A2A conversation state, default `~/.wechat_to_a2a/conversations.json` |

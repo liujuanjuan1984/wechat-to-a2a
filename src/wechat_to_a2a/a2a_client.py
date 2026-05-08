@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 import httpx
-from a2a.client import Client, ClientConfig, ClientFactory, minimal_agent_card
+from a2a.client import Client, ClientConfig, ClientFactory
 from a2a.client.card_resolver import parse_agent_card
 from a2a.client.client_factory import TransportProtocol
 from a2a.types import Part, Role, SendMessageRequest, StreamResponse, Task, TaskState
@@ -23,20 +23,16 @@ class A2AClient:
     def __init__(
         self,
         *,
-        agent_card_url: str | None = None,
-        endpoint: str | None = None,
+        agent_card_url: str,
         bearer_token: str | None = None,
         timeout_seconds: float = 30.0,
         client: httpx.AsyncClient | None = None,
     ) -> None:
-        self._endpoint = endpoint
         self._agent_card_url = agent_card_url
         self._bearer_token = bearer_token
         self._timeout_seconds = timeout_seconds
         self._client = client
         self._sdk_client: Client | None = None
-        if not self._endpoint and not self._agent_card_url:
-            raise ValueError("agent_card_url or endpoint is required")
 
     async def send_message(
         self,
@@ -74,15 +70,11 @@ class A2AClient:
             accepted_output_modes=["text/plain"],
         )
         factory = ClientFactory(config)
-        if self._endpoint:
-            card = minimal_agent_card(self._endpoint, [TransportProtocol.JSONRPC])
-        else:
-            card = await self._fetch_agent_card(httpx_client)
+        card = await self._fetch_agent_card(httpx_client)
         self._sdk_client = factory.create(card)
         return self._sdk_client
 
     async def _fetch_agent_card(self, httpx_client: httpx.AsyncClient):
-        assert self._agent_card_url is not None
         response = await httpx_client.get(self._agent_card_url)
         response.raise_for_status()
         card = response.json()

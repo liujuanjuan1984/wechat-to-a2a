@@ -5,10 +5,33 @@ import pytest
 
 from wechat_to_a2a.a2a_client import A2AClient, _task_state_to_text
 
+AGENT_CARD_URL = "https://agent.example/.well-known/agent-card.json"
+AGENT_ENDPOINT = "https://agent.example/a2a"
+
+
+def _agent_card(endpoint: str = AGENT_ENDPOINT) -> dict[str, object]:
+    return {
+        "name": "agent",
+        "description": "test agent",
+        "supportedInterfaces": [
+            {
+                "url": endpoint,
+                "protocolBinding": "JSONRPC",
+                "protocolVersion": "1.0",
+            }
+        ],
+        "version": "1.0.0",
+        "capabilities": {},
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+    }
+
 
 @pytest.mark.asyncio
 async def test_send_message_extracts_artifact_text_and_context() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json=_agent_card())
         payload = request.read()
         assert b"SendMessage" in payload
         assert request.headers["authorization"] == "Bearer token"
@@ -31,7 +54,7 @@ async def test_send_message_extracts_artifact_text_and_context() -> None:
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport) as http_client:
         client = A2AClient(
-            endpoint="https://agent.example/a2a",
+            agent_card_url=AGENT_CARD_URL,
             bearer_token="token",
             client=http_client,
         )
@@ -53,24 +76,7 @@ async def test_send_message_resolves_endpoint_from_agent_card() -> None:
         assert request.headers["authorization"] == "Bearer token"
         if request.url.path == "/.well-known/agent-card.json":
             seen_card_request = True
-            return httpx.Response(
-                200,
-                json={
-                    "name": "agent",
-                    "description": "test agent",
-                    "supportedInterfaces": [
-                        {
-                            "url": "https://agent.example/a2a",
-                            "protocolBinding": "JSONRPC",
-                            "protocolVersion": "1.0",
-                        }
-                    ],
-                    "version": "1.0.0",
-                    "capabilities": {},
-                    "defaultInputModes": ["text/plain"],
-                    "defaultOutputModes": ["text/plain"],
-                },
-            )
+            return httpx.Response(200, json=_agent_card())
         seen_message_request = True
         assert request.url.path == "/a2a"
         assert b"SendMessage" in request.read()
@@ -114,21 +120,7 @@ async def test_send_message_resolves_endpoint_from_supported_interfaces() -> Non
             seen_card_request = True
             return httpx.Response(
                 200,
-                json={
-                    "name": "agent",
-                    "description": "test agent",
-                    "supportedInterfaces": [
-                        {
-                            "url": "https://commons.kalos.art/api/a2a/",
-                            "protocolBinding": "JSONRPC",
-                            "protocolVersion": "1.0",
-                        }
-                    ],
-                    "version": "1.0.0",
-                    "capabilities": {},
-                    "defaultInputModes": ["text/plain"],
-                    "defaultOutputModes": ["text/plain"],
-                },
+                json=_agent_card("https://commons.kalos.art/api/a2a/"),
             )
         seen_message_request = True
         assert str(request.url) == "https://commons.kalos.art/api/a2a/"
@@ -164,6 +156,8 @@ async def test_send_message_resolves_endpoint_from_supported_interfaces() -> Non
 @pytest.mark.asyncio
 async def test_send_message_extracts_text_from_message_response() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json=_agent_card())
         return httpx.Response(
             200,
             json={
@@ -182,7 +176,7 @@ async def test_send_message_extracts_text_from_message_response() -> None:
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport) as http_client:
-        client = A2AClient(endpoint="https://agent.example/a2a", client=http_client)
+        client = A2AClient(agent_card_url=AGENT_CARD_URL, client=http_client)
         reply = await client.send_message(text="hello")
 
     assert reply.text == "message reply"
@@ -194,6 +188,8 @@ async def test_send_message_extracts_text_from_message_response() -> None:
 @pytest.mark.asyncio
 async def test_send_message_extracts_status_message_for_input_required() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json=_agent_card())
         return httpx.Response(
             200,
             json={
@@ -218,7 +214,7 @@ async def test_send_message_extracts_status_message_for_input_required() -> None
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport) as http_client:
-        client = A2AClient(endpoint="https://agent.example/a2a", client=http_client)
+        client = A2AClient(agent_card_url=AGENT_CARD_URL, client=http_client)
         reply = await client.send_message(text="hello")
 
     assert reply.text == "Need more detail"
@@ -230,6 +226,8 @@ async def test_send_message_extracts_status_message_for_input_required() -> None
 @pytest.mark.asyncio
 async def test_send_message_includes_context_and_task_for_continuation() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json=_agent_card())
         payload = request.read()
         assert b'"contextId":"ctx-1"' in payload
         assert b'"taskId":"task-1"' in payload
@@ -251,13 +249,15 @@ async def test_send_message_includes_context_and_task_for_continuation() -> None
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport) as http_client:
-        client = A2AClient(endpoint="https://agent.example/a2a", client=http_client)
+        client = A2AClient(agent_card_url=AGENT_CARD_URL, client=http_client)
         await client.send_message(text="details", context_id="ctx-1", task_id="task-1")
 
 
 @pytest.mark.asyncio
 async def test_send_message_raises_on_jsonrpc_error() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json=_agent_card())
         return httpx.Response(
             200,
             json={
@@ -269,7 +269,7 @@ async def test_send_message_raises_on_jsonrpc_error() -> None:
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport) as http_client:
-        client = A2AClient(endpoint="https://agent.example/a2a", client=http_client)
+        client = A2AClient(agent_card_url=AGENT_CARD_URL, client=http_client)
         with pytest.raises(Exception, match="failed"):
             await client.send_message(text="hello")
 

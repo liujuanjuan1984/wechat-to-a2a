@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "wechat-to-a2a"
 dynamic = ["version"]
-description = "A WeChat gateway for chatting with any A2A-compatible agent"
+description = "A WeChat gateway for chatting with any A2A 1.0-compatible agent"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"

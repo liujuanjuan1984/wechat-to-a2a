@@ -79,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
             base_url=args.base_url,
         )
         a2a_client = A2AClient(
-            agent_card_url=settings.upstream_a2a_card_endpoint,
+            agent_card_url=settings.upstream_a2a_card_url_value,
             bearer_token=settings.upstream_a2a_bearer_token,
             timeout_seconds=settings.upstream_a2a_timeout_seconds,
         )
