@@ -239,7 +239,8 @@ class A2AClient:
                 idle_value = idle_timeout if idle_timeout is not None else 0.0
                 raise TimeoutError(f"A2A stream idle timeout after {idle_value:.1f}s") from exc
 
-            last_activity_at = time.monotonic()
+            if event is not None:
+                last_activity_at = time.monotonic()
             yield event
 
 
@@ -367,10 +368,10 @@ class _StreamAccumulator:
         }
 
     def _text(self) -> str:
-        if self._final_text:
-            return self._final_text
         if self._chunks:
             return "\n".join(self._chunks)
+        if self._final_text:
+            return self._final_text
         return "\n".join(self._status_chunks)
 
 

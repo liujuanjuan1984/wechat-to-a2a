@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from typing import Any, cast
 
 import httpx
 
-from wechat_to_a2a.gateway import GatewayReply
+from wechat_to_a2a.gateway import GatewayReply, WeChatA2AGateway
 from wechat_to_a2a.ilink import (
     ILinkClient,
     ILinkCredentials,
@@ -96,10 +97,10 @@ async def test_ilink_client_sends_text_payload() -> None:
 
 class FakeGateway:
     def __init__(self, *, fail: bool = False) -> None:
-        self.messages = []
+        self.messages: list[Any] = []
         self.fail = fail
 
-    async def handle_message(self, message):
+    async def handle_message(self, message: Any) -> GatewayReply:
         self.messages.append(message)
         if self.fail:
             raise RuntimeError("upstream failed")
@@ -114,9 +115,16 @@ class FakeGateway:
 
 class FakeILinkClient:
     def __init__(self) -> None:
-        self.sent = []
+        self.sent: list[tuple[str, str, str, str | None]] = []
 
-    async def send_text(self, *, to_user_id, text, context_token, client_id=None):
+    async def send_text(
+        self,
+        *,
+        to_user_id: str,
+        text: str,
+        context_token: str,
+        client_id: str | None = None,
+    ) -> dict[str, int]:
         self.sent.append((to_user_id, text, context_token, client_id))
         return {"ret": 0}
 
@@ -127,8 +135,8 @@ async def test_ilink_runner_forwards_text_to_a2a_and_replies(tmp_path) -> None:
     ilink_client = FakeILinkClient()
     runner = ILinkGatewayRunner(
         account_id="acct",
-        ilink_client=ilink_client,
-        gateway=gateway,
+        ilink_client=cast(ILinkClient, ilink_client),
+        gateway=cast(WeChatA2AGateway, gateway),
         state_store=store,
         send_chunk_delay_seconds=0,
     )
@@ -155,8 +163,8 @@ async def test_ilink_runner_reports_upstream_errors_without_raising(tmp_path) ->
     ilink_client = FakeILinkClient()
     runner = ILinkGatewayRunner(
         account_id="acct",
-        ilink_client=ilink_client,
-        gateway=gateway,
+        ilink_client=cast(ILinkClient, ilink_client),
+        gateway=cast(WeChatA2AGateway, gateway),
         state_store=store,
         send_chunk_delay_seconds=0,
     )

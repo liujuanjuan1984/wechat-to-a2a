@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -21,11 +22,13 @@ def _query(token: str = "secret") -> str:
     return f"signature={_signature(token, timestamp, nonce)}&timestamp={timestamp}&nonce={nonce}"
 
 
-def _settings(tmp_path) -> Settings:
-    return Settings(
-        wechat_token="secret",
-        upstream_a2a_card_url="https://agent.example/.well-known/agent-card.json",
-        conversation_state_path=tmp_path / "conversations.json",
+def _settings(tmp_path: Path) -> Settings:
+    return Settings.model_validate(
+        {
+            "wechat_token": "secret",
+            "upstream_a2a_card_url": "https://agent.example/.well-known/agent-card.json",
+            "conversation_state_path": tmp_path / "conversations.json",
+        }
     )
 
 
@@ -52,7 +55,9 @@ def test_health(tmp_path) -> None:
 def test_create_app_requires_wechat_token_for_official_mode() -> None:
     with pytest.raises(RuntimeError, match="WECHAT_TO_A2A_WECHAT_TOKEN"):
         create_app(
-            Settings(upstream_a2a_card_url="https://agent.example/.well-known/agent-card.json")
+            Settings.model_validate(
+                {"upstream_a2a_card_url": "https://agent.example/.well-known/agent-card.json"}
+            )
         )
 
 

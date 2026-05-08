@@ -14,7 +14,9 @@ def test_default_conversation_state_path_uses_home_directory(monkeypatch) -> Non
 
 
 def test_settings_uses_upstream_agent_card_url() -> None:
-    settings = Settings(upstream_a2a_card_url="https://agent.example/.well-known/agent-card.json")
+    settings = Settings.model_validate(
+        {"upstream_a2a_card_url": "https://agent.example/.well-known/agent-card.json"}
+    )
 
     assert (
         settings.upstream_a2a_card_url_value == "https://agent.example/.well-known/agent-card.json"
