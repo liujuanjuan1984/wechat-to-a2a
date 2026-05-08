@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -9,6 +10,7 @@ from .formatting import MAX_WECHAT_TEXT_CHARS, split_wechat_text
 from .wechat import WeChatMessage
 
 CONTINUATION_STATES = frozenset({"auth-required", "input-required", "working"})
+logger = logging.getLogger(__name__)
 
 
 class A2AClientProtocol(Protocol):
@@ -71,6 +73,16 @@ class WeChatA2AGateway:
             split_multiline_messages=self._split_multiline_messages,
         )
         text = "\n\n".join(chunks) if chunks else "The upstream A2A agent returned no text."
+        if not chunks:
+            logger.warning(
+                "A2A reply produced no WeChat chunks conversation_key=%s context_id=%s "
+                "task_id=%s state=%s text_chars=%s",
+                conversation_key,
+                context_id,
+                task_id,
+                a2a_reply.state,
+                len(a2a_reply.text),
+            )
         return GatewayReply(
             text=text,
             chunks=chunks,

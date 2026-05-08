@@ -77,6 +77,15 @@ class A2AClient:
         if task_id:
             request.message.task_id = task_id
 
+        logger.info(
+            "A2A send_message start mode=%s message_id=%s input_chars=%s has_context=%s "
+            "has_task=%s",
+            "streaming" if sdk_client.streaming else "non-streaming",
+            request.message.message_id,
+            len(text),
+            bool(context_id),
+            bool(task_id),
+        )
         accumulator = _StreamAccumulator()
         async for event in self._iter_events_with_timeouts(
             sdk_client.client.send_message(request),
@@ -86,12 +95,26 @@ class A2AClient:
                 logger.debug("A2A upstream stream heartbeat")
                 continue
             accumulator.consume(event)
+            logger.info("A2A event consumed %s", accumulator.last_event_summary())
             if accumulator.state in TURN_TERMINAL_STATES:
                 break
 
         reply = accumulator.reply()
         if reply is None:
+            logger.warning("A2A send_message returned no response events=%s", accumulator.summary())
             raise RuntimeError("A2A send_message returned no response")
+        if not reply.text:
+            logger.warning("A2A upstream reply contained no text %s", accumulator.summary())
+        else:
+            logger.info(
+                "A2A send_message completed text_chars=%s context_id=%s task_id=%s state=%s "
+                "events=%s",
+                len(reply.text),
+                reply.context_id,
+                reply.task_id,
+                reply.state,
+                accumulator.event_count,
+            )
         return reply
 
     async def _get_sdk_client(self) -> _SDKClientEntry:
@@ -112,10 +135,27 @@ class A2AClient:
             client=factory.create(card),
             streaming=bool(card.capabilities.streaming),
         )
+        logger.info(
+            "A2A agent card loaded name=%r version=%r streaming_declared=%s "
+            "selected_mode=%s interfaces=%s",
+            card.name,
+            card.version,
+            bool(card.capabilities.streaming),
+            "streaming" if entry.streaming else "non-streaming",
+            [
+                {
+                    "protocol": interface.protocol_binding,
+                    "version": interface.protocol_version,
+                    "url": interface.url,
+                }
+                for interface in card.supported_interfaces
+            ],
+        )
         self._sdk_client = entry
         return entry
 
     async def _fetch_agent_card(self, httpx_client: httpx.AsyncClient):
+        logger.info("A2A fetching agent card url=%s", self._agent_card_url)
         response = await asyncio.wait_for(
             httpx_client.get(self._agent_card_url),
             timeout=self._timeout_seconds,
@@ -196,9 +236,15 @@ class _StreamAccumulator:
     def __init__(self) -> None:
         self._chunks: list[str] = []
         self._final_text: str | None = None
+        self._event_kinds: list[str] = []
+        self._last_event: dict[str, object] = {}
         self.context_id: str | None = None
         self.task_id: str | None = None
         self.state: str | None = None
+
+    @property
+    def event_count(self) -> int:
+        return len(self._event_kinds)
 
     def consume(self, response: StreamResponse) -> None:
         if response.HasField("task"):
@@ -226,12 +272,35 @@ class _StreamAccumulator:
             state=self.state,
         )
 
+    def last_event_summary(self) -> dict[str, object]:
+        return dict(self._last_event)
+
+    def summary(self) -> dict[str, object]:
+        text = self._final_text if self._final_text is not None else "\n".join(self._chunks)
+        return {
+            "events": self.event_count,
+            "event_kinds": list(self._event_kinds),
+            "text_chars": len(text),
+            "chunk_count": len(self._chunks),
+            "final_text_chars": len(self._final_text or ""),
+            "context_id": self.context_id,
+            "task_id": self.task_id,
+            "state": self.state,
+            "last_event": dict(self._last_event),
+        }
+
     def _consume_task(self, task: Task) -> None:
         reply = _reply_from_task(task)
         self._final_text = reply.text
         self.context_id = reply.context_id or self.context_id
         self.task_id = reply.task_id or self.task_id
         self.state = reply.state or self.state
+        self._record_event(
+            "task",
+            text_chars=len(reply.text),
+            artifact_count=len(task.artifacts),
+            status_has_message=task.status.HasField("message"),
+        )
 
     def _consume_message_response(self, response: StreamResponse) -> None:
         reply = _reply_from_stream_response(response)
@@ -240,6 +309,7 @@ class _StreamAccumulator:
         self.context_id = reply.context_id or self.context_id
         self.task_id = reply.task_id or self.task_id
         self.state = reply.state or self.state
+        self._record_event("message", text_chars=len(reply.text))
 
     def _consume_artifact_update_response(self, response: StreamResponse) -> None:
         update = response.artifact_update
@@ -248,6 +318,13 @@ class _StreamAccumulator:
             self._chunks.append(text)
         self.context_id = update.context_id or self.context_id
         self.task_id = update.task_id or self.task_id
+        self._record_event(
+            "artifact_update",
+            text_chars=len(text),
+            part_count=len(update.artifact.parts),
+            append=update.append,
+            last_chunk=update.last_chunk,
+        )
 
     def _consume_status_update_response(self, response: StreamResponse) -> None:
         update = response.status_update
@@ -259,6 +336,21 @@ class _StreamAccumulator:
         self.context_id = update.context_id or self.context_id
         self.task_id = update.task_id or self.task_id
         self.state = _task_state_to_text(update.status.state) or self.state
+        self._record_event(
+            "status_update",
+            text_chars=len(text),
+            status_has_message=update.status.HasField("message"),
+        )
+
+    def _record_event(self, kind: str, **extra: object) -> None:
+        self._event_kinds.append(kind)
+        self._last_event = {
+            "kind": kind,
+            "context_id": self.context_id,
+            "task_id": self.task_id,
+            "state": self.state,
+            **extra,
+        }
 
 
 async def _iter_stream_events_with_heartbeat(

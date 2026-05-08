@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import httpx
 import pytest
@@ -119,6 +120,43 @@ async def test_send_message_resolves_endpoint_from_agent_card() -> None:
 
     assert seen_card_request
     assert seen_message_request
+
+
+@pytest.mark.asyncio
+async def test_send_message_logs_empty_upstream_reply(caplog) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json=_agent_card())
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": "wechat-to-a2a",
+                "result": {
+                    "task": {
+                        "id": "task-empty",
+                        "contextId": "ctx-empty",
+                        "status": {"state": "TASK_STATE_COMPLETED"},
+                        "artifacts": [],
+                    },
+                },
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = A2AClient(agent_card_url=AGENT_CARD_URL, client=http_client)
+        with caplog.at_level(logging.INFO, logger="wechat_to_a2a.a2a_client"):
+            reply = await client.send_message(text="hello")
+
+    assert reply.text == ""
+    assert reply.context_id == "ctx-empty"
+    assert reply.task_id == "task-empty"
+    assert reply.state == "completed"
+    assert "A2A agent card loaded" in caplog.text
+    assert "A2A event consumed" in caplog.text
+    assert "A2A upstream reply contained no text" in caplog.text
+    assert "event_kinds" in caplog.text
 
 
 @pytest.mark.asyncio
