@@ -3,30 +3,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
-from typing import cast
 from uuid import uuid4
 
 import httpx
 from a2a.client import Client, ClientConfig, ClientFactory
 from a2a.client.card_resolver import parse_agent_card
 from a2a.client.client_factory import TransportProtocol
-from a2a.types import (
-    GetTaskRequest,
-    Part,
-    Role,
-    SendMessageRequest,
-    StreamResponse,
-    Task,
-    TaskState,
-)
-from google.protobuf import json_format  # type: ignore[import-untyped]
-from jsonrpc.jsonrpc2 import JSONRPC20Request, JSONRPC20Response  # type: ignore[import-untyped]
+from a2a.types import Part, Role, SendMessageRequest, StreamResponse, Task, TaskState
+
+from wechat_to_a2a.a2a_transport import ResilientJsonRpcTransport
 
 logger = logging.getLogger(__name__)
-TASK_RECOVERY_POLL_INTERVAL_SECONDS = 2.0
-WORKING_TASK_STATES = frozenset({"submitted", "working"})
 
 TURN_TERMINAL_STATES = frozenset(
     {
@@ -52,13 +41,6 @@ class A2AReply:
 class _SDKClientEntry:
     client: Client
     streaming: bool
-    endpoint: str
-
-
-@dataclass(frozen=True, slots=True)
-class _SSEFrame:
-    event: str
-    data: str
 
 
 class A2AClient:
@@ -108,12 +90,12 @@ class A2AClient:
         )
         if sdk_client.streaming:
             reply = await self._send_streaming_message(
+                sdk_client.client,
                 request,
-                endpoint=sdk_client.endpoint,
                 on_response_started=on_response_started,
             )
         else:
-            reply = await self._send_non_streaming_message(request)
+            reply = await self._send_non_streaming_message(sdk_client.client, request)
 
         if reply is None:
             logger.warning("A2A send_message returned no response")
@@ -148,12 +130,20 @@ class A2AClient:
             accepted_output_modes=["text/plain"],
         )
         factory = ClientFactory(config)
+        factory.register(
+            TransportProtocol.JSONRPC,
+            lambda card, url, config: ResilientJsonRpcTransport(
+                httpx_client,
+                card,
+                url,
+                timeout_seconds=self._timeout_seconds,
+                stream_idle_timeout_seconds=self._stream_idle_timeout_seconds,
+            ),
+        )
         card = await self._fetch_agent_card(httpx_client)
-        endpoint = _resolve_endpoint(card)
         entry = _SDKClientEntry(
             client=factory.create(card),
             streaming=bool(card.capabilities.streaming),
-            endpoint=endpoint,
         )
         logger.debug(
             "A2A agent card loaded name=%r version=%r streaming_declared=%s "
@@ -214,11 +204,11 @@ class A2AClient:
 
     async def _send_non_streaming_message(
         self,
+        sdk_client: Client,
         request: SendMessageRequest,
     ) -> A2AReply | None:
-        sdk_client = await self._get_sdk_client()
         accumulator = _StreamAccumulator()
-        stream_iter = sdk_client.client.send_message(request).__aiter__()
+        stream_iter = sdk_client.send_message(request).__aiter__()
         total_timeout = _positive_float_or_none(self._timeout_seconds)
         started_at = time.monotonic()
 
@@ -249,135 +239,22 @@ class A2AClient:
 
     async def _send_streaming_message(
         self,
+        sdk_client: Client,
         request: SendMessageRequest,
         *,
-        endpoint: str,
         on_response_started: Callable[[], Awaitable[None] | None] | None = None,
     ) -> A2AReply | None:
         accumulator = _StreamAccumulator()
         response_started = False
-        try:
-            async for event in self._iter_streaming_events(request, endpoint=endpoint):
-                if not response_started:
-                    response_started = True
-                    await _notify_response_started(on_response_started)
-                accumulator.consume(event)
-                logger.debug("A2A event consumed %s", accumulator.last_event_summary())
-                if accumulator.state in TURN_TERMINAL_STATES:
-                    break
-        except TimeoutError as exc:
-            recovered = await self._recover_working_task(
-                accumulator,
-                None if response_started else on_response_started,
-            )
-            if recovered is None:
-                raise exc
-            return recovered
+        async for event in sdk_client.send_message(request):
+            if not response_started:
+                response_started = True
+                await _notify_response_started(on_response_started)
+            accumulator.consume(event)
+            logger.debug("A2A event consumed %s", accumulator.last_event_summary())
+            if accumulator.state in TURN_TERMINAL_STATES:
+                break
         return accumulator.reply()
-
-    async def _iter_streaming_events(
-        self,
-        request: SendMessageRequest,
-        *,
-        endpoint: str,
-    ) -> AsyncIterator[StreamResponse]:
-        httpx_client = self._httpx_client()
-        rpc_request = JSONRPC20Request(
-            method="SendStreamingMessage",
-            params=json_format.MessageToDict(request),
-            _id=str(uuid4()),
-        )
-        idle_timeout = _positive_float_or_none(self._stream_idle_timeout_seconds)
-        line_timeout = idle_timeout
-
-        async with httpx_client.stream("POST", endpoint, json=dict(rpc_request.data)) as response:
-            response.raise_for_status()
-            content_type = response.headers.get("content-type", "")
-            if "text/event-stream" not in content_type:
-                payload = await response.aread()
-                if not payload:
-                    return
-                yield _parse_stream_response_payload(payload.decode("utf-8"))
-                return
-
-            parser = _SSEFrameParser()
-            line_iter = response.aiter_lines().__aiter__()
-            while True:
-                try:
-                    if line_timeout is None:
-                        raw_line = await anext(line_iter)
-                    else:
-                        raw_line = await asyncio.wait_for(anext(line_iter), timeout=line_timeout)
-                except StopAsyncIteration:
-                    frame = parser.flush()
-                    if frame is None or not frame.data:
-                        return
-                    if frame.event == "error":
-                        raise RuntimeError(f"A2A upstream SSE error: {frame.data}") from None
-                    yield _parse_stream_response_payload(frame.data)
-                    return
-                except TimeoutError as exc:
-                    idle_value = idle_timeout if idle_timeout is not None else 0.0
-                    raise TimeoutError(f"A2A stream idle timeout after {idle_value:.1f}s") from exc
-
-                frame = parser.push(raw_line.rstrip("\n"))
-                if frame is None:
-                    continue
-                if not frame.data:
-                    logger.debug("A2A upstream transport keepalive received")
-                    continue
-                if frame.event == "error":
-                    raise RuntimeError(f"A2A upstream SSE error: {frame.data}")
-                yield _parse_stream_response_payload(frame.data)
-
-    async def _recover_working_task(
-        self,
-        accumulator: _StreamAccumulator,
-        on_response_started: Callable[[], Awaitable[None] | None] | None = None,
-    ) -> A2AReply | None:
-        task_id = accumulator.task_id
-        state = accumulator.state
-        if not task_id or state not in WORKING_TASK_STATES:
-            return None
-
-        logger.warning(
-            "A2A stream stalled while task still active; falling back to GetTask task_id=%s "
-            "context_id=%s state=%s",
-            task_id,
-            accumulator.context_id,
-            state,
-        )
-        await _notify_response_started(on_response_started)
-        deadline = time.monotonic() + max(self._timeout_seconds, 0.0)
-        poll_interval = min(
-            TASK_RECOVERY_POLL_INTERVAL_SECONDS,
-            max(self._stream_idle_timeout_seconds / 2.0, 0.25),
-        )
-        while True:
-            task = await self._get_task(task_id)
-            reply = _reply_from_task(task)
-            logger.debug(
-                "A2A GetTask recovery snapshot task_id=%s context_id=%s state=%s text_chars=%s",
-                reply.task_id,
-                reply.context_id,
-                reply.state,
-                len(reply.text),
-            )
-            if reply.state not in WORKING_TASK_STATES:
-                return reply
-            if self._timeout_seconds > 0 and time.monotonic() >= (deadline - 1e-9):
-                raise TimeoutError(
-                    f"A2A GetTask recovery timeout after {self._timeout_seconds:.1f}s"
-                )
-            await asyncio.sleep(poll_interval)
-
-    async def _get_task(self, task_id: str) -> Task:
-        sdk_client = await self._get_sdk_client()
-        request = GetTaskRequest(id=task_id)
-        return await asyncio.wait_for(
-            sdk_client.client.get_task(request),
-            timeout=self._timeout_seconds,
-        )
 
 
 class _StreamAccumulator:
@@ -521,49 +398,6 @@ async def _notify_response_started(
         await result
 
 
-class _SSEFrameParser:
-    def __init__(self) -> None:
-        self._event = "message"
-        self._data_lines: list[str] = []
-
-    def push(self, line: str) -> _SSEFrame | None:
-        if line == "":
-            frame = _SSEFrame(event=self._event, data="\n".join(self._data_lines))
-            self._reset()
-            return frame
-        if line.startswith(":"):
-            return None
-        field, _, value = line.partition(":")
-        if value.startswith(" "):
-            value = value[1:]
-        if field == "event":
-            self._event = value or "message"
-        elif field == "data":
-            self._data_lines.append(value)
-        return None
-
-    def flush(self) -> _SSEFrame | None:
-        if not self._data_lines:
-            self._reset()
-            return None
-        frame = _SSEFrame(event=self._event, data="\n".join(self._data_lines))
-        self._reset()
-        return frame
-
-    def _reset(self) -> None:
-        self._event = "message"
-        self._data_lines = []
-
-
-def _parse_stream_response_payload(payload: str) -> StreamResponse:
-    json_rpc_response = JSONRPC20Response.from_json(payload)
-    if json_rpc_response.error:
-        code = getattr(json_rpc_response.error, "code", "unknown")
-        message = getattr(json_rpc_response.error, "message", "unknown error")
-        raise RuntimeError(f"A2A upstream JSON-RPC error {code}: {message}")
-    return cast(StreamResponse, json_format.ParseDict(json_rpc_response.result, StreamResponse()))
-
-
 def _reply_from_task(task: Task) -> A2AReply:
     artifact_parts = [part for artifact in task.artifacts for part in artifact.parts]
     text = _extract_text(artifact_parts)
@@ -580,19 +414,6 @@ def _reply_from_task(task: Task) -> A2AReply:
 def _extract_text(parts: Iterable[Part]) -> str:
     chunks = [part.text for part in parts if part.text]
     return "\n".join(chunks)
-
-
-def _resolve_endpoint(card: object) -> str:
-    supported_interfaces = getattr(card, "supported_interfaces", None) or []
-    for interface in supported_interfaces:
-        protocol = str(getattr(interface, "protocol_binding", "")).upper()
-        url = getattr(interface, "url", "") or ""
-        if protocol.endswith("JSONRPC") and url:
-            return str(url)
-    card_url = getattr(card, "url", "") or ""
-    if card_url:
-        return str(card_url)
-    raise RuntimeError(f"A2A agent card missing JSONRPC interface url: {card!r}")
 
 
 def _task_state_to_text(state: int) -> str | None:
