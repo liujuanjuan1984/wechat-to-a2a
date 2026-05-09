@@ -96,12 +96,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "ilink-run":
         settings = _load_settings(parser, args)
         state_store = ILinkStateStore(args.state_dir)
-        credentials = _resolve_ilink_credentials(
-            state_store=state_store,
-            account_id=args.account_id,
-            token=args.token,
-            base_url=args.base_url,
-        )
+        try:
+            credentials = _resolve_ilink_credentials(
+                state_store=state_store,
+                account_id=args.account_id,
+                token=args.token,
+                base_url=args.base_url,
+            )
+        except RuntimeError as exc:
+            parser.exit(2, f"{parser.prog}: {exc}\n")
         a2a_client = A2AClient(
             agent_card_url=settings.upstream_a2a_card_url_value,
             bearer_token=settings.upstream_a2a_bearer_token,
@@ -243,7 +246,7 @@ def _resolve_ilink_credentials(
     base_url = base_url or os.getenv("WECHAT_TO_A2A_ILINK_BASE_URL")
 
     if not account_id:
-        account_id = _single_saved_account_id(state_store)
+        account_id = _default_saved_account_id(state_store)
     if not account_id:
         raise RuntimeError("iLink account id is required; run `wechat-to-a2a ilink-login` first")
 
@@ -261,8 +264,8 @@ def _resolve_ilink_credentials(
     )
 
 
-def _single_saved_account_id(state_store: ILinkStateStore) -> str | None:
-    return state_store.single_saved_account_id()
+def _default_saved_account_id(state_store: ILinkStateStore) -> str | None:
+    return state_store.single_saved_account_id() or state_store.latest_saved_account_id()
 
 
 def _run_until_interrupted(coro: Coroutine[Any, Any, Any]) -> int:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, cast
 
 import httpx
@@ -51,6 +52,17 @@ def test_ilink_state_store_persists_credentials_and_tokens(tmp_path) -> None:
     assert restored.get_context_token("acct", "peer") == "ctx-token"
     restored.clear_context_token("acct", "peer")
     assert restored.get_context_token("acct", "peer") is None
+
+
+def test_ilink_state_store_selects_latest_saved_account_when_multiple_exist(tmp_path) -> None:
+    store = ILinkStateStore(tmp_path)
+    store.save_credentials(ILinkCredentials(account_id="old", token="old-token"))
+    store.save_credentials(ILinkCredentials(account_id="new", token="new-token"))
+    os.utime(tmp_path / "old.json", ns=(1, 1))
+    os.utime(tmp_path / "new.json", ns=(2, 2))
+
+    assert store.single_saved_account_id() is None
+    assert store.latest_saved_account_id() == "new"
 
 
 def test_parse_ilink_message_uses_room_id_as_chat_id() -> None:

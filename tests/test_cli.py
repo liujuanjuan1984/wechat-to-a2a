@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
 
 from wechat_to_a2a.cli import (
     _load_settings,
+    _resolve_ilink_credentials,
     _run_ilink_gateway,
     _run_until_interrupted,
     build_parser,
 )
+from wechat_to_a2a.ilink import ILinkCredentials, ILinkStateStore
 
 
 def test_cli_accepts_serve_command() -> None:
@@ -171,6 +174,24 @@ def test_load_settings_prefers_cli_over_env_and_persistent_config(
     settings = _load_settings(parser, args)
 
     assert settings.upstream_a2a_card_url_value == "https://cli.example/.well-known/agent-card.json"
+
+
+def test_resolve_ilink_credentials_uses_latest_saved_account(tmp_path: Path) -> None:
+    state_store = ILinkStateStore(tmp_path)
+    state_store.save_credentials(ILinkCredentials(account_id="old", token="old-token"))
+    state_store.save_credentials(ILinkCredentials(account_id="new", token="new-token"))
+    os.utime(tmp_path / "old.json", ns=(1, 1))
+    os.utime(tmp_path / "new.json", ns=(2, 2))
+
+    credentials = _resolve_ilink_credentials(
+        state_store=state_store,
+        account_id=None,
+        token=None,
+        base_url=None,
+    )
+
+    assert credentials.account_id == "new"
+    assert credentials.token == "new-token"
 
 
 async def test_run_ilink_gateway_closes_clients_on_cancellation() -> None:

@@ -97,14 +97,16 @@ class ILinkStateStore:
         )
 
     def single_saved_account_id(self) -> str | None:
-        account_files = [
-            path
-            for path in self._root.glob("*.json")
-            if not path.name.endswith((".sync.json", ".context-tokens.json"))
-        ]
+        account_files = self._credential_files()
         if len(account_files) != 1:
             return None
         return account_files[0].stem
+
+    def latest_saved_account_id(self) -> str | None:
+        account_files = self._credential_files()
+        if not account_files:
+            return None
+        return max(account_files, key=lambda path: (path.stat().st_mtime_ns, path.name)).stem
 
     def load_sync_buf(self, account_id: str) -> str:
         path = self._sync_path(account_id)
@@ -140,6 +142,13 @@ class ILinkStateStore:
 
     def _account_path(self, account_id: str) -> Path:
         return self._root / f"{account_id}.json"
+
+    def _credential_files(self) -> list[Path]:
+        return [
+            path
+            for path in self._root.glob("*.json")
+            if not path.name.endswith((".sync.json", ".context-tokens.json"))
+        ]
 
     def _sync_path(self, account_id: str) -> Path:
         return self._root / f"{account_id}.sync.json"
