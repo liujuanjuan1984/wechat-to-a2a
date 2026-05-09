@@ -246,7 +246,7 @@ async def test_ilink_runner_forwards_text_to_a2a_and_replies(tmp_path) -> None:
     assert gateway.messages[0].gateway == "ilink"
     assert gateway.messages[0].from_user == "peer"
     assert gateway.messages[0].content == "hi"
-    assert ilink_client.config_calls == []
+    assert ilink_client.config_calls == [("peer", "ctx-token")]
     assert ilink_client.typing == []
     assert ilink_client.sent == [("peer", "reply", "ctx-token", None)]
 
@@ -273,6 +273,7 @@ async def test_ilink_runner_reports_upstream_errors_without_raising(tmp_path) ->
     )
 
     assert reply is None
+    assert ilink_client.config_calls == [("peer", "ctx-token")]
     assert ilink_client.typing == []
     assert ilink_client.sent == [
         ("peer", "The upstream A2A agent is unavailable.", "ctx-token", None)
@@ -280,7 +281,8 @@ async def test_ilink_runner_reports_upstream_errors_without_raising(tmp_path) ->
 
 
 async def test_ilink_runner_uses_delayed_typing_for_slow_turn(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr("wechat_to_a2a.ilink.TYPING_START_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr("wechat_to_a2a.ilink.TYPING_REFRESH_SECONDS", 0.01)
+    monkeypatch.setattr("wechat_to_a2a.ilink.TYPING_SEND_TIMEOUT_SECONDS", 0.25)
     store = ILinkStateStore(tmp_path)
     gateway = FakeGateway(trigger_response_started=False, delay_seconds=0.01)
     ilink_client = FakeILinkClient()
@@ -302,6 +304,7 @@ async def test_ilink_runner_uses_delayed_typing_for_slow_turn(monkeypatch, tmp_p
     )
 
     assert reply is not None
+    assert ilink_client.config_calls == [("peer", "ctx-token")]
     assert ilink_client.typing == [
         ("peer", "ticket-1", TYPING_START),
         ("peer", "ticket-1", TYPING_STOP),
@@ -330,5 +333,5 @@ async def test_ilink_runner_skips_late_typing_start_for_fast_turn(tmp_path) -> N
     )
 
     assert reply is not None
-    assert ilink_client.config_calls == []
+    assert ilink_client.config_calls == [("peer", "ctx-token")]
     assert ilink_client.typing == []

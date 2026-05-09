@@ -9,7 +9,6 @@ import struct
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
@@ -48,7 +47,8 @@ RATE_LIMIT_ERRCODE = -2
 TYPING_TICKET_TTL_SECONDS = 600.0
 TYPING_START = 1
 TYPING_STOP = 2
-TYPING_START_DELAY_SECONDS = 0.75
+TYPING_REFRESH_SECONDS = 2.0
+TYPING_SEND_TIMEOUT_SECONDS = 1.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,6 +338,7 @@ class ILinkGatewayRunner:
         self._send_chunk_delay_seconds = send_chunk_delay_seconds
         self._seen_message_ids: set[str] = set()
         self._typing_tickets: dict[str, tuple[str, float]] = {}
+        self._typing_ticket_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def run_forever(self) -> None:  # pragma: no cover
         sync_buf = self._state_store.load_sync_buf(self._account_id)
@@ -374,12 +375,17 @@ class ILinkGatewayRunner:
                 inbound.chat_id,
                 inbound.context_token,
             )
-
-        typing_controller = _TypingController(
-            runner=self,
-            chat_id=inbound.chat_id,
+        self._ensure_typing_ticket_prefetch(
+            inbound.chat_id,
+            inbound.context_token,
         )
-        typing_controller.start_delay_timer()
+        typing_stop_event = asyncio.Event()
+        typing_task = asyncio.create_task(
+            self._keep_typing(
+                inbound.chat_id,
+                stop_event=typing_stop_event,
+            )
+        )
         try:
             reply = await self._gateway.handle_message(
                 WeChatMessage(
@@ -391,11 +397,10 @@ class ILinkGatewayRunner:
                     msg_id=inbound.message_id,
                     gateway="ilink",
                 ),
-                on_response_started=typing_controller.notify_response_started,
             )
         except Exception:
             logger.exception("upstream A2A handling failed for iLink chat_id=%s", inbound.chat_id)
-            await typing_controller.stop()
+            await self._stop_typing_task(inbound.chat_id, typing_task, typing_stop_event)
             reply = GatewayReply(
                 text="The upstream A2A agent is unavailable.",
                 chunks=["The upstream A2A agent is unavailable."],
@@ -405,12 +410,12 @@ class ILinkGatewayRunner:
             )
             await self._send_reply(inbound.chat_id, reply)
             return None
-        await typing_controller.stop()
+        await self._stop_typing_task(inbound.chat_id, typing_task, typing_stop_event)
         await self._send_reply(inbound.chat_id, reply)
         return reply
 
     async def _send_typing_status(self, chat_id: str, status: int) -> None:
-        typing_ticket = await self._typing_ticket(chat_id)
+        typing_ticket = self._cached_typing_ticket(chat_id)
         if not typing_ticket:
             return
         try:
@@ -423,24 +428,105 @@ class ILinkGatewayRunner:
             action = "start" if status == TYPING_START else "stop"
             logger.debug("iLink typing %s failed for chat_id=%s: %s", action, chat_id, exc)
 
-    async def _typing_ticket(self, chat_id: str) -> str | None:
+    def _cached_typing_ticket(self, chat_id: str) -> str | None:
         cached = self._typing_tickets.get(chat_id)
         if cached and time.time() - cached[1] < TYPING_TICKET_TTL_SECONDS:
             return cached[0]
-        context_token = self._state_store.get_context_token(self._account_id, chat_id)
+        return None
+
+    def _ensure_typing_ticket_prefetch(
+        self,
+        chat_id: str,
+        context_token: str | None,
+    ) -> None:
+        if self._cached_typing_ticket(chat_id):
+            return
+        existing = self._typing_ticket_tasks.get(chat_id)
+        if existing is not None and not existing.done():
+            return
+        task = asyncio.create_task(self._maybe_fetch_typing_ticket(chat_id, context_token))
+        self._typing_ticket_tasks[chat_id] = task
+
+    async def _maybe_fetch_typing_ticket(
+        self,
+        chat_id: str,
+        context_token: str | None,
+    ) -> None:
         try:
             response = await self._ilink_client.get_config(
                 user_id=chat_id,
                 context_token=context_token,
             )
+            typing_ticket = _optional_str(response.get("typing_ticket"))
+            if typing_ticket:
+                self._typing_tickets[chat_id] = (typing_ticket, time.time())
         except Exception as exc:
             logger.debug("iLink getconfig failed for chat_id=%s: %s", chat_id, exc)
-            return None
-        typing_ticket = _optional_str(response.get("typing_ticket"))
-        if not typing_ticket:
-            return None
-        self._typing_tickets[chat_id] = (typing_ticket, time.time())
-        return typing_ticket
+        finally:
+            task = self._typing_ticket_tasks.get(chat_id)
+            if task is not None and task.done():
+                self._typing_ticket_tasks.pop(chat_id, None)
+
+    async def _keep_typing(
+        self,
+        chat_id: str,
+        *,
+        stop_event: asyncio.Event,
+        interval: float | None = None,
+    ) -> None:
+        if interval is None:
+            interval = TYPING_REFRESH_SECONDS
+        send_timeout = max(0.25, min(TYPING_SEND_TIMEOUT_SECONDS, interval - 0.25))
+        started = False
+        try:
+            while True:
+                if stop_event.is_set():
+                    return
+                prefetch_task = self._typing_ticket_tasks.get(chat_id)
+                if self._cached_typing_ticket(chat_id) is None and prefetch_task is not None:
+                    try:
+                        await asyncio.wait_for(asyncio.shield(prefetch_task), timeout=send_timeout)
+                    except (TimeoutError, asyncio.CancelledError):
+                        pass
+                try:
+                    await asyncio.wait_for(
+                        self._send_typing_status(chat_id, TYPING_START),
+                        timeout=send_timeout,
+                    )
+                    if self._cached_typing_ticket(chat_id):
+                        started = True
+                except TimeoutError:
+                    pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.debug("iLink typing loop failed for chat_id=%s: %s", chat_id, exc)
+
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + interval
+                while not stop_event.is_set():
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        break
+                    await asyncio.sleep(min(0.25, remaining))
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if started:
+                await self._send_typing_status(chat_id, TYPING_STOP)
+
+    async def _stop_typing_task(
+        self,
+        chat_id: str,
+        typing_task: asyncio.Task[None],
+        stop_event: asyncio.Event,
+    ) -> None:
+        stop_event.set()
+        typing_task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(typing_task), timeout=0.5)
+        except (asyncio.CancelledError, TimeoutError):
+            pass
 
     async def _send_reply(self, chat_id: str, reply: GatewayReply) -> None:
         chunks = reply.chunks or [reply.text]
@@ -601,61 +687,3 @@ def _required_str(data: dict[str, Any], key: str) -> str:
 
 def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
-
-
-class _TypingController:
-    def __init__(self, *, runner: ILinkGatewayRunner, chat_id: str) -> None:
-        self._runner = runner
-        self._chat_id = chat_id
-        self._started = False
-        self._stopped = False
-        self._start_task: asyncio.Task[None] | None = None
-        self._delay_task: asyncio.Task[None] | None = None
-
-    def start_delay_timer(self) -> None:
-        if not self._stopped and self._delay_task is None:
-            self._delay_task = asyncio.create_task(self._delayed_start())
-
-    async def notify_response_started(self) -> None:
-        if self._started or self._stopped:
-            return
-        self._cancel_delay_task()
-        self._ensure_start_task()
-
-    async def stop(self) -> None:
-        self._stopped = True
-        self._cancel_delay_task()
-        if self._start_task is None:
-            return
-        if not self._started and not self._start_task.done():
-            self._start_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._start_task
-            return
-        await asyncio.shield(self._start_task)
-        if self._started:
-            await self._runner._send_typing_status(self._chat_id, TYPING_STOP)
-
-    async def _delayed_start(self) -> None:
-        try:
-            await asyncio.sleep(TYPING_START_DELAY_SECONDS)
-        except asyncio.CancelledError:
-            return
-        self._ensure_start_task()
-
-    def _ensure_start_task(self) -> None:
-        if not self._stopped and self._start_task is None:
-            self._start_task = asyncio.create_task(self._start())
-
-    async def _start(self) -> None:
-        if self._stopped:
-            return
-        await self._runner._send_typing_status(self._chat_id, TYPING_START)
-        if self._stopped:
-            return
-        self._started = True
-
-    def _cancel_delay_task(self) -> None:
-        if self._delay_task is not None and not self._delay_task.done():
-            self._delay_task.cancel()
-        self._delay_task = None
