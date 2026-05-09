@@ -4,7 +4,12 @@ import asyncio
 
 import pytest
 
-from wechat_to_a2a.cli import _run_ilink_gateway, _run_until_interrupted, build_parser
+from wechat_to_a2a.cli import (
+    _load_settings,
+    _run_ilink_gateway,
+    _run_until_interrupted,
+    build_parser,
+)
 
 
 def test_cli_accepts_serve_command() -> None:
@@ -26,10 +31,53 @@ def test_cli_accepts_ilink_run_command() -> None:
     assert args.account_id == "acct"
 
 
+def test_cli_accepts_upstream_a2a_card_url_option() -> None:
+    args = build_parser().parse_args(
+        [
+            "ilink-run",
+            "--upstream-a2a-card-url",
+            "https://agent.example/.well-known/agent-card.json",
+        ]
+    )
+    assert args.upstream_a2a_card_url == "https://agent.example/.well-known/agent-card.json"
+
+
 def test_cli_requires_command() -> None:
     with pytest.raises(SystemExit) as exc_info:
         build_parser().parse_args([])
     assert exc_info.value.code == 2
+
+
+def test_load_settings_reports_missing_upstream_card_url(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("WECHAT_TO_A2A_UPSTREAM_A2A_CARD_URL", raising=False)
+    parser = build_parser()
+    args = parser.parse_args(["ilink-run"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        _load_settings(parser, args)
+
+    assert exc_info.value.code == 2
+    captured = capsys.readouterr()
+    assert "missing upstream A2A Agent Card URL" in captured.err
+    assert "WECHAT_TO_A2A_UPSTREAM_A2A_CARD_URL" in captured.err
+    assert "--upstream-a2a-card-url" in captured.err
+
+
+def test_load_settings_reads_upstream_card_url_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "WECHAT_TO_A2A_UPSTREAM_A2A_CARD_URL",
+        "https://agent.example/.well-known/agent-card.json",
+    )
+    parser = build_parser()
+    args = parser.parse_args(["ilink-run"])
+
+    settings = _load_settings(parser, args)
+
+    assert (
+        settings.upstream_a2a_card_url_value == "https://agent.example/.well-known/agent-card.json"
+    )
 
 
 async def test_run_ilink_gateway_closes_clients_on_cancellation() -> None:

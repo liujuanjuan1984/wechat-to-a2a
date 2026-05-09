@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
+from pydantic import ValidationError
 
 from .a2a_client import A2AClient
 from .app import create_app
@@ -33,6 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--log-level", default="info")
+    _add_upstream_a2a_args(serve)
 
     ilink_login = subparsers.add_parser("ilink-login", help="Login to WeChat via iLink QR")
     ilink_login.add_argument("--state-dir", type=Path, default=default_ilink_state_dir())
@@ -46,6 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     ilink_run.add_argument("--state-dir", type=Path, default=default_ilink_state_dir())
     ilink_run.add_argument("--poll-interval", type=float, default=1.0)
     ilink_run.add_argument("--send-chunk-delay", type=float, default=1.5)
+    _add_upstream_a2a_args(ilink_run)
     return parser
 
 
@@ -55,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO)
 
     if args.command == "serve":
-        settings = Settings()  # type: ignore[call-arg]
+        settings = _load_settings(parser, args)
         app = create_app(settings)
         uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
         return 0
@@ -72,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if credentials is not None else 1
 
     if args.command == "ilink-run":
-        settings = Settings()  # type: ignore[call-arg]
+        settings = _load_settings(parser, args)
         state_store = ILinkStateStore(args.state_dir)
         credentials = _resolve_ilink_credentials(
             state_store=state_store,
@@ -115,6 +118,51 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.error(f"unknown command: {args.command}")
     return 2
+
+
+def _add_upstream_a2a_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--upstream-a2a-card-url",
+        help=(
+            "Upstream A2A Agent Card URL. Can also be set with WECHAT_TO_A2A_UPSTREAM_A2A_CARD_URL."
+        ),
+    )
+    parser.add_argument(
+        "--upstream-a2a-bearer-token",
+        help=(
+            "Optional bearer token for the upstream A2A Agent Card and endpoint. Can also "
+            "be set with WECHAT_TO_A2A_UPSTREAM_A2A_BEARER_TOKEN."
+        ),
+    )
+
+
+def _load_settings(parser: argparse.ArgumentParser, args: argparse.Namespace) -> Settings:
+    overrides: dict[str, str] = {}
+    if args.upstream_a2a_card_url:
+        overrides["upstream_a2a_card_url"] = args.upstream_a2a_card_url
+    if args.upstream_a2a_bearer_token:
+        overrides["upstream_a2a_bearer_token"] = args.upstream_a2a_bearer_token
+    try:
+        return Settings(**overrides)  # type: ignore[arg-type]
+    except ValidationError as exc:
+        parser.exit(2, _format_settings_error(parser.prog, exc))
+
+
+def _format_settings_error(prog: str, exc: ValidationError) -> str:
+    for error in exc.errors():
+        if tuple(error["loc"]) == ("upstream_a2a_card_url",) and error["type"] == "missing":
+            return (
+                f"{prog}: configuration error: missing upstream A2A Agent Card URL.\n"
+                "Set WECHAT_TO_A2A_UPSTREAM_A2A_CARD_URL or pass "
+                "--upstream-a2a-card-url.\n"
+                "Example:\n"
+                "  export WECHAT_TO_A2A_UPSTREAM_A2A_CARD_URL="
+                '"https://example.com/.well-known/agent-card.json"\n'
+            )
+    details = "; ".join(
+        f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in exc.errors()
+    )
+    return f"{prog}: configuration error: {details}\n"
 
 
 def _resolve_ilink_credentials(
