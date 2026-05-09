@@ -4,7 +4,7 @@ import hashlib
 
 import pytest
 
-from wechat_a2a_gateway.wechat import parse_message_xml, render_text_reply, verify_signature
+from wechat_to_a2a.wechat import parse_message_xml, render_text_reply, verify_signature
 
 
 def _signature(token: str, timestamp: str, nonce: str) -> str:

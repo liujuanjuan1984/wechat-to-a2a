@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "wechat-to-a2a"
 dynamic = ["version"]
-description = "A WeChat gateway for chatting with any A2A-compatible agent"
+description = "A WeChat gateway for chatting with any A2A 1.0-compatible agent"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -25,10 +25,12 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
 ]
 dependencies = [
+    "a2a-sdk==1.0.2",
     "fastapi>=0.110,<1.0",
     "httpx>=0.27,<1.0",
     "pydantic>=2.6,<3.0",
     "pydantic-settings>=2.2,<3.0",
+    "qrcode>=8,<9",
     "uvicorn>=0.29,<1.0",
 ]
 
@@ -44,7 +46,7 @@ dev = [
 ]
 
 [project.scripts]
-wechat-to-a2a = "wechat_a2a_gateway.cli:main"
+wechat-to-a2a = "wechat_to_a2a.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/liujuanjuan1984/wechat-to-a2a"
@@ -59,7 +61,7 @@ fallback_version = "0+unknown"
 tag_regex = "^v?(?P<version>.+)$"
 
 [tool.setuptools.package-data]
-wechat_a2a_gateway = ["py.typed"]
+wechat_to_a2a = ["py.typed"]
 
 [tool.ruff]
 line-length = 100
@@ -73,7 +75,7 @@ quote-style = "double"
 
 [tool.mypy]
 python_version = "3.11"
-files = ["src/wechat_a2a_gateway"]
+files = ["src/wechat_to_a2a"]
 show_error_codes = true
 pretty = true
 warn_redundant_casts = true
@@ -82,5 +84,5 @@ check_untyped_defs = true
 warn_return_any = true
 
 [tool.pytest.ini_options]
-addopts = "--cov=src/wechat_a2a_gateway --cov-report=term-missing --cov-report=json:.coverage.json --cov-fail-under=80"
+addopts = "--cov=src/wechat_to_a2a --cov-report=term-missing --cov-report=json:.coverage.json --cov-fail-under=80"
 asyncio_mode = "auto"
