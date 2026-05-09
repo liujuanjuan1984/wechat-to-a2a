@@ -9,6 +9,7 @@ import struct
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
@@ -607,22 +608,29 @@ class _TypingController:
         self._runner = runner
         self._chat_id = chat_id
         self._started = False
+        self._stopped = False
         self._start_task: asyncio.Task[None] | None = None
         self._delay_task: asyncio.Task[None] | None = None
 
     def start_delay_timer(self) -> None:
-        if self._delay_task is None:
+        if not self._stopped and self._delay_task is None:
             self._delay_task = asyncio.create_task(self._delayed_start())
 
     async def notify_response_started(self) -> None:
-        if self._started:
+        if self._started or self._stopped:
             return
         self._cancel_delay_task()
         self._ensure_start_task()
 
     async def stop(self) -> None:
+        self._stopped = True
         self._cancel_delay_task()
         if self._start_task is None:
+            return
+        if not self._started and not self._start_task.done():
+            self._start_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._start_task
             return
         await asyncio.shield(self._start_task)
         if self._started:
@@ -636,11 +644,15 @@ class _TypingController:
         self._ensure_start_task()
 
     def _ensure_start_task(self) -> None:
-        if self._start_task is None:
+        if not self._stopped and self._start_task is None:
             self._start_task = asyncio.create_task(self._start())
 
     async def _start(self) -> None:
+        if self._stopped:
+            return
         await self._runner._send_typing_status(self._chat_id, TYPING_START)
+        if self._stopped:
+            return
         self._started = True
 
     def _cancel_delay_task(self) -> None:

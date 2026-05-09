@@ -246,11 +246,8 @@ async def test_ilink_runner_forwards_text_to_a2a_and_replies(tmp_path) -> None:
     assert gateway.messages[0].gateway == "ilink"
     assert gateway.messages[0].from_user == "peer"
     assert gateway.messages[0].content == "hi"
-    assert ilink_client.config_calls == [("peer", "ctx-token")]
-    assert ilink_client.typing == [
-        ("peer", "ticket-1", TYPING_START),
-        ("peer", "ticket-1", TYPING_STOP),
-    ]
+    assert ilink_client.config_calls == []
+    assert ilink_client.typing == []
     assert ilink_client.sent == [("peer", "reply", "ctx-token", None)]
 
 
@@ -276,10 +273,7 @@ async def test_ilink_runner_reports_upstream_errors_without_raising(tmp_path) ->
     )
 
     assert reply is None
-    assert ilink_client.typing == [
-        ("peer", "ticket-1", TYPING_START),
-        ("peer", "ticket-1", TYPING_STOP),
-    ]
+    assert ilink_client.typing == []
     assert ilink_client.sent == [
         ("peer", "The upstream A2A agent is unavailable.", "ctx-token", None)
     ]
@@ -312,3 +306,29 @@ async def test_ilink_runner_uses_delayed_typing_for_slow_turn(monkeypatch, tmp_p
         ("peer", "ticket-1", TYPING_START),
         ("peer", "ticket-1", TYPING_STOP),
     ]
+
+
+async def test_ilink_runner_skips_late_typing_start_for_fast_turn(tmp_path) -> None:
+    store = ILinkStateStore(tmp_path)
+    gateway = FakeGateway(trigger_response_started=True, delay_seconds=0.0)
+    ilink_client = FakeILinkClient()
+    runner = ILinkGatewayRunner(
+        account_id="acct",
+        ilink_client=cast(ILinkClient, ilink_client),
+        gateway=cast(WeChatA2AGateway, gateway),
+        state_store=store,
+        send_chunk_delay_seconds=0,
+    )
+
+    reply = await runner.handle_raw_message(
+        {
+            "from_user_id": "peer",
+            "message_id": "msg-1",
+            "context_token": "ctx-token",
+            "item_list": [{"type": 1, "text_item": {"text": "hi"}}],
+        }
+    )
+
+    assert reply is not None
+    assert ilink_client.config_calls == []
+    assert ilink_client.typing == []
