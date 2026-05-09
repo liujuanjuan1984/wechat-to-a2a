@@ -253,14 +253,12 @@ def _resolve_ilink_credentials(
     saved = state_store.load_credentials(account_id)
     token = token or (saved.token if saved else None)
     base_url = base_url or (saved.base_url if saved else None)
-    user_id = saved.user_id if saved else ""
     if not token:
         raise RuntimeError("iLink token is required; run `wechat-to-a2a ilink-login` first")
     return ILinkCredentials(
         account_id=account_id,
         token=token,
         base_url=base_url or "https://ilinkai.weixin.qq.com",
-        user_id=user_id,
     )
 
 

@@ -42,7 +42,6 @@ def test_ilink_state_store_persists_credentials_and_tokens(tmp_path) -> None:
         account_id="acct",
         token="token",
         base_url="https://ilink.example",
-        user_id="user",
     )
 
     store.save_credentials(credentials)

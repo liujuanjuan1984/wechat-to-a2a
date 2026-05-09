@@ -56,7 +56,6 @@ class ILinkCredentials:
     account_id: str
     token: str
     base_url: str = ILINK_BASE_URL
-    user_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +81,6 @@ class ILinkStateStore:
                 "account_id": credentials.account_id,
                 "token": credentials.token,
                 "base_url": credentials.base_url,
-                "user_id": credentials.user_id,
                 "saved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             },
         )
@@ -101,7 +99,6 @@ class ILinkStateStore:
             account_id=account_id,
             token=token,
             base_url=_optional_str(data.get("base_url")) or ILINK_BASE_URL,
-            user_id=_optional_str(data.get("user_id")) or "",
         )
 
     def single_saved_account_id(self) -> str | None:
@@ -593,7 +590,6 @@ async def run_qr_login(
                 account_id=_required_str(status_response, "ilink_bot_id"),
                 token=_required_str(status_response, "bot_token"),
                 base_url=_optional_str(status_response.get("baseurl")) or ILINK_BASE_URL,
-                user_id=_optional_str(status_response.get("ilink_user_id")) or "",
             )
             state_store.save_credentials(credentials)
             print(f"\niLink 登录成功，account_id={credentials.account_id}")
