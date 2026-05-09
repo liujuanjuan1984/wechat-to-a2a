@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -42,6 +43,23 @@ def test_cli_accepts_upstream_a2a_card_url_option() -> None:
     assert args.upstream_a2a_card_url == "https://agent.example/.well-known/agent-card.json"
 
 
+def test_cli_accepts_config_set_upstream_command() -> None:
+    args = build_parser().parse_args(
+        [
+            "config",
+            "set-upstream",
+            "--card-url",
+            "https://agent.example/.well-known/agent-card.json",
+            "--bearer-token",
+            "secret",
+        ]
+    )
+    assert args.command == "config"
+    assert args.config_command == "set-upstream"
+    assert args.card_url == "https://agent.example/.well-known/agent-card.json"
+    assert args.bearer_token == "secret"
+
+
 def test_cli_requires_command() -> None:
     with pytest.raises(SystemExit) as exc_info:
         build_parser().parse_args([])
@@ -49,8 +67,9 @@ def test_cli_requires_command() -> None:
 
 
 def test_load_settings_reports_missing_upstream_card_url(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("WECHAT_TO_A2A_UPSTREAM_A2A_CARD_URL", raising=False)
     parser = build_parser()
     args = parser.parse_args(["ilink-run"])
@@ -65,7 +84,10 @@ def test_load_settings_reports_missing_upstream_card_url(
     assert "--upstream-a2a-card-url" in captured.err
 
 
-def test_load_settings_reads_upstream_card_url_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_settings_reads_upstream_card_url_from_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.setenv(
         "WECHAT_TO_A2A_UPSTREAM_A2A_CARD_URL",
         "https://agent.example/.well-known/agent-card.json",
@@ -78,6 +100,77 @@ def test_load_settings_reads_upstream_card_url_from_env(monkeypatch: pytest.Monk
     assert (
         settings.upstream_a2a_card_url_value == "https://agent.example/.well-known/agent-card.json"
     )
+
+
+def test_load_settings_reads_upstream_card_url_from_persistent_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("WECHAT_TO_A2A_UPSTREAM_A2A_CARD_URL", raising=False)
+    config_path = tmp_path / ".wechat_to_a2a" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        '{"upstream_a2a_card_url": "https://saved.example/.well-known/agent-card.json"}',
+        encoding="utf-8",
+    )
+    parser = build_parser()
+    args = parser.parse_args(["ilink-run"])
+
+    settings = _load_settings(parser, args)
+
+    assert (
+        settings.upstream_a2a_card_url_value == "https://saved.example/.well-known/agent-card.json"
+    )
+
+
+def test_load_settings_prefers_env_over_persistent_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv(
+        "WECHAT_TO_A2A_UPSTREAM_A2A_CARD_URL",
+        "https://env.example/.well-known/agent-card.json",
+    )
+    config_path = tmp_path / ".wechat_to_a2a" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        '{"upstream_a2a_card_url": "https://saved.example/.well-known/agent-card.json"}',
+        encoding="utf-8",
+    )
+    parser = build_parser()
+    args = parser.parse_args(["ilink-run"])
+
+    settings = _load_settings(parser, args)
+
+    assert settings.upstream_a2a_card_url_value == "https://env.example/.well-known/agent-card.json"
+
+
+def test_load_settings_prefers_cli_over_env_and_persistent_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv(
+        "WECHAT_TO_A2A_UPSTREAM_A2A_CARD_URL",
+        "https://env.example/.well-known/agent-card.json",
+    )
+    config_path = tmp_path / ".wechat_to_a2a" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        '{"upstream_a2a_card_url": "https://saved.example/.well-known/agent-card.json"}',
+        encoding="utf-8",
+    )
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "ilink-run",
+            "--upstream-a2a-card-url",
+            "https://cli.example/.well-known/agent-card.json",
+        ]
+    )
+
+    settings = _load_settings(parser, args)
+
+    assert settings.upstream_a2a_card_url_value == "https://cli.example/.well-known/agent-card.json"
 
 
 async def test_run_ilink_gateway_closes_clients_on_cancellation() -> None:

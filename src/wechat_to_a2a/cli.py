@@ -23,7 +23,14 @@ from .ilink import (
     default_ilink_state_dir,
     run_qr_login,
 )
-from .settings import Settings
+from .settings import (
+    UPSTREAM_A2A_BEARER_TOKEN_ENV,
+    UPSTREAM_A2A_CARD_URL_ENV,
+    Settings,
+    default_config_path,
+    load_persistent_config,
+    save_upstream_config,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -49,6 +56,18 @@ def build_parser() -> argparse.ArgumentParser:
     ilink_run.add_argument("--poll-interval", type=float, default=1.0)
     ilink_run.add_argument("--send-chunk-delay", type=float, default=1.5)
     _add_upstream_a2a_args(ilink_run)
+
+    config = subparsers.add_parser("config", help="Manage local configuration")
+    config_subparsers = config.add_subparsers(dest="config_command", required=True)
+    set_upstream = config_subparsers.add_parser(
+        "set-upstream",
+        help="Persist upstream A2A Agent Card settings locally",
+    )
+    set_upstream.add_argument("--card-url", required=True)
+    set_upstream.add_argument("--bearer-token")
+    set_upstream.add_argument("--clear-bearer-token", action="store_true")
+    show_config = config_subparsers.add_parser("show", help="Show local configuration")
+    show_config.add_argument("--show-token", action="store_true")
     return parser
 
 
@@ -116,6 +135,30 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
 
+    if args.command == "config":
+        if args.config_command == "set-upstream":
+            if args.bearer_token and args.clear_bearer_token:
+                parser.error("--bearer-token and --clear-bearer-token cannot be used together")
+            try:
+                config_path = save_upstream_config(
+                    card_url=args.card_url,
+                    bearer_token=args.bearer_token,
+                    clear_bearer_token=args.clear_bearer_token,
+                )
+            except ValidationError as exc:
+                parser.exit(2, _format_settings_error(parser.prog, exc))
+            except RuntimeError as exc:
+                parser.exit(2, f"{parser.prog}: configuration error: {exc}\n")
+            print(f"Saved upstream A2A configuration to {config_path}")
+            return 0
+        if args.config_command == "show":
+            try:
+                _print_config(show_token=args.show_token)
+            except RuntimeError as exc:
+                parser.exit(2, f"{parser.prog}: configuration error: {exc}\n")
+            return 0
+        parser.error(f"unknown config command: {args.config_command}")
+
     parser.error(f"unknown command: {args.command}")
     return 2
 
@@ -137,15 +180,38 @@ def _add_upstream_a2a_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _load_settings(parser: argparse.ArgumentParser, args: argparse.Namespace) -> Settings:
-    overrides: dict[str, str] = {}
-    if args.upstream_a2a_card_url:
-        overrides["upstream_a2a_card_url"] = args.upstream_a2a_card_url
-    if args.upstream_a2a_bearer_token:
-        overrides["upstream_a2a_bearer_token"] = args.upstream_a2a_bearer_token
     try:
+        overrides = _persistent_settings_overrides()
+        if args.upstream_a2a_card_url:
+            overrides["upstream_a2a_card_url"] = args.upstream_a2a_card_url
+        if args.upstream_a2a_bearer_token:
+            overrides["upstream_a2a_bearer_token"] = args.upstream_a2a_bearer_token
         return Settings(**overrides)  # type: ignore[arg-type]
     except ValidationError as exc:
         parser.exit(2, _format_settings_error(parser.prog, exc))
+    except RuntimeError as exc:
+        parser.exit(2, f"{parser.prog}: configuration error: {exc}\n")
+
+
+def _persistent_settings_overrides() -> dict[str, str]:
+    values = load_persistent_config()
+    if UPSTREAM_A2A_CARD_URL_ENV in os.environ:
+        values.pop("upstream_a2a_card_url", None)
+    if UPSTREAM_A2A_BEARER_TOKEN_ENV in os.environ:
+        values.pop("upstream_a2a_bearer_token", None)
+    return values
+
+
+def _print_config(*, show_token: bool) -> None:
+    config_path = default_config_path()
+    values = load_persistent_config(config_path)
+    print(f"Config file: {config_path}")
+    print(f"upstream_a2a_card_url: {values.get('upstream_a2a_card_url', '<unset>')}")
+    token = values.get("upstream_a2a_bearer_token")
+    if show_token:
+        print(f"upstream_a2a_bearer_token: {token or '<unset>'}")
+    else:
+        print(f"upstream_a2a_bearer_token: {'<set>' if token else '<unset>'}")
 
 
 def _format_settings_error(prog: str, exc: ValidationError) -> str:

@@ -58,12 +58,24 @@ uv run wechat-to-a2a ilink-login
 ```
 
 The login stores iLink credentials under `~/.wechat_to_a2a/ilink` by default.
-Then run the gateway against any upstream A2A Agent Card:
+Then persist the upstream A2A Agent Card once:
 
 ```bash
-export WECHAT_TO_A2A_UPSTREAM_A2A_CARD_URL="http://127.0.0.1:8080/.well-known/agent-card.json"
-export WECHAT_TO_A2A_UPSTREAM_A2A_BEARER_TOKEN="optional-upstream-token"
+uv run wechat-to-a2a config set-upstream \
+  --card-url "http://127.0.0.1:8080/.well-known/agent-card.json"
+```
 
+If the upstream A2A service requires auth, include a bearer token:
+
+```bash
+uv run wechat-to-a2a config set-upstream \
+  --card-url "http://127.0.0.1:8080/.well-known/agent-card.json" \
+  --bearer-token "optional-upstream-token"
+```
+
+Then run the gateway:
+
+```bash
 uv run wechat-to-a2a ilink-run
 ```
 
@@ -81,6 +93,14 @@ Conversation state is created automatically at:
 ```text
 ~/.wechat_to_a2a/conversations.json
 ```
+
+Local gateway configuration is stored at:
+
+```text
+~/.wechat_to_a2a/config.json
+```
+
+Environment variables and command-line flags still override the saved config for one-off runs.
 
 ## Official Account Quick Start
 
@@ -110,12 +130,14 @@ bash ./scripts/dependency_health.sh
 ## Configuration
 
 Environment variables use the `WECHAT_TO_A2A_` prefix.
+The upstream A2A Agent Card URL and bearer token can also be saved with
+`wechat-to-a2a config set-upstream`.
 
 | Variable | Required | Description |
 | --- | --- | --- |
 | `WECHAT_TO_A2A_WECHAT_TOKEN` | Official mode only | Token configured in WeChat Official Account callback settings |
-| `WECHAT_TO_A2A_UPSTREAM_A2A_CARD_URL` | Yes | Upstream A2A 1.0 Agent Card URL; the SDK resolves the JSON-RPC endpoint from the card's advertised interfaces |
-| `WECHAT_TO_A2A_UPSTREAM_A2A_BEARER_TOKEN` | No | Bearer token sent when fetching the Agent Card and calling the upstream A2A endpoint |
+| `WECHAT_TO_A2A_UPSTREAM_A2A_CARD_URL` | Yes, unless saved in config | Upstream A2A 1.0 Agent Card URL; the SDK resolves the JSON-RPC endpoint from the card's advertised interfaces |
+| `WECHAT_TO_A2A_UPSTREAM_A2A_BEARER_TOKEN` | No | Bearer token sent when fetching the Agent Card and calling the upstream A2A endpoint; can be saved locally with config file permissions restricted to the current user |
 | `WECHAT_TO_A2A_UPSTREAM_A2A_TIMEOUT_SECONDS` | No | Timeout for Agent Card fetches and non-streaming upstream A2A turns, default `300`; streaming turns are governed by stream idle timeout instead |
 | `WECHAT_TO_A2A_UPSTREAM_A2A_STREAM_IDLE_TIMEOUT_SECONDS` | No | Idle timeout while waiting for upstream stream activity, default `60`; set `0` to disable |
 | `WECHAT_TO_A2A_CONVERSATION_STATE_PATH` | No | JSON file used to persist WeChat-to-A2A conversation state, default `~/.wechat_to_a2a/conversations.json` |
