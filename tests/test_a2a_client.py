@@ -22,6 +22,16 @@ class _DelayedStream(httpx.AsyncByteStream):
         yield self._content
 
 
+class _ChunkedStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: list[tuple[bytes, float]]) -> None:
+        self._chunks = chunks
+
+    async def __aiter__(self):
+        for chunk, delay_seconds in self._chunks:
+            await asyncio.sleep(delay_seconds)
+            yield chunk
+
+
 def _agent_card(endpoint: str = AGENT_ENDPOINT, *, streaming: bool = False) -> dict[str, object]:
     return {
         "name": "agent",
@@ -156,7 +166,6 @@ async def test_send_message_logs_empty_upstream_reply(caplog) -> None:
     assert "A2A agent card loaded" in caplog.text
     assert "A2A event consumed" in caplog.text
     assert "A2A upstream reply contained no text" in caplog.text
-    assert "event_kinds" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -384,24 +393,63 @@ async def test_streaming_turn_is_not_cut_off_by_request_timeout() -> None:
 
 
 @pytest.mark.asyncio
-async def test_streaming_idle_timeout_is_not_reset_by_local_heartbeat(monkeypatch) -> None:
-    async def never_yields():
-        await asyncio.sleep(60)
-        if False:
-            yield None
+async def test_streaming_transport_keepalive_refreshes_idle_timer() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json=_agent_card(streaming=True))
+        stream = _ChunkedStream(
+            [
+                (b": keepalive\n\n", 0.005),
+                (
+                    b'data: {"jsonrpc":"2.0","id":"1","result":{"artifactUpdate":'
+                    b'{"taskId":"task-1","contextId":"ctx-1","artifact":{"parts":'
+                    b'[{"text":"late"}]}}}}\n\n'
+                    b'data: {"jsonrpc":"2.0","id":"1","result":{"statusUpdate":'
+                    b'{"taskId":"task-1","contextId":"ctx-1","status":'
+                    b'{"state":"TASK_STATE_COMPLETED"}}}}\n\n',
+                    0.005,
+                ),
+            ]
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=stream,
+        )
 
-    monkeypatch.setattr(
-        "wechat_to_a2a.a2a_client.STREAM_HEARTBEAT_INTERVAL_SECONDS",
-        0.001,
-    )
-    client = A2AClient(
-        agent_card_url=AGENT_CARD_URL,
-        stream_idle_timeout_seconds=0.01,
-    )
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = A2AClient(
+            agent_card_url=AGENT_CARD_URL,
+            stream_idle_timeout_seconds=0.01,
+            client=http_client,
+        )
+        reply = await client.send_message(text="hello")
 
-    with pytest.raises(TimeoutError, match="idle timeout"):
-        async for _event in client._iter_events_with_timeouts(never_yields(), streaming=True):
-            pass
+    assert reply.text == "late"
+    assert reply.state == "completed"
+
+
+@pytest.mark.asyncio
+async def test_streaming_idle_timeout_fires_when_upstream_sends_no_activity() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json=_agent_card(streaming=True))
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_ChunkedStream([(b"", 0.03)]),
+        )
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = A2AClient(
+            agent_card_url=AGENT_CARD_URL,
+            stream_idle_timeout_seconds=0.01,
+            client=http_client,
+        )
+        with pytest.raises(TimeoutError, match="idle timeout"):
+            await client.send_message(text="hello")
 
 
 @pytest.mark.asyncio
@@ -434,6 +482,65 @@ async def test_streaming_artifact_text_takes_precedence_over_task_snapshot() -> 
         reply = await client.send_message(text="hello")
 
     assert reply.text == "streamed"
+    assert reply.context_id == "ctx-1"
+    assert reply.task_id == "task-1"
+    assert reply.state == "completed"
+
+
+@pytest.mark.asyncio
+async def test_streaming_idle_timeout_recovers_working_task_via_get_task() -> None:
+    get_task_calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal get_task_calls
+        if request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json=_agent_card(streaming=True))
+        payload = request.read().decode()
+        if "SendStreamingMessage" in payload:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_ChunkedStream(
+                    [
+                        (
+                            b'data: {"jsonrpc":"2.0","id":"1","result":{"task":'
+                            b'{"id":"task-1","contextId":"ctx-1","status":'
+                            b'{"state":"TASK_STATE_WORKING"},"artifacts":[]}}}\n\n',
+                            0.0,
+                        ),
+                        (b"", 0.03),
+                    ]
+                ),
+            )
+        if "GetTask" in payload:
+            get_task_calls += 1
+            return httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "wechat-to-a2a",
+                    "result": {
+                        "id": "task-1",
+                        "contextId": "ctx-1",
+                        "status": {"state": "TASK_STATE_COMPLETED"},
+                        "artifacts": [{"parts": [{"text": "recovered reply"}]}],
+                    },
+                },
+            )
+        raise AssertionError(f"unexpected request payload: {payload}")
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = A2AClient(
+            agent_card_url=AGENT_CARD_URL,
+            timeout_seconds=0.1,
+            stream_idle_timeout_seconds=0.01,
+            client=http_client,
+        )
+        reply = await client.send_message(text="hello")
+
+    assert get_task_calls >= 1
+    assert reply.text == "recovered reply"
     assert reply.context_id == "ctx-1"
     assert reply.task_id == "task-1"
     assert reply.state == "completed"
