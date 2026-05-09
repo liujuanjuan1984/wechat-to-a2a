@@ -8,6 +8,8 @@ import httpx
 
 from wechat_to_a2a.gateway import GatewayReply, WeChatA2AGateway
 from wechat_to_a2a.ilink import (
+    TYPING_START,
+    TYPING_STOP,
     ILinkClient,
     ILinkCredentials,
     ILinkGatewayRunner,
@@ -107,6 +109,47 @@ async def test_ilink_client_sends_text_payload() -> None:
     assert response == {"ret": 0}
 
 
+async def test_ilink_client_fetches_config_and_sends_typing_payload() -> None:
+    seen_config = False
+    seen_typing = False
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_config, seen_typing
+        assert request.headers["authorization"] == "Bearer token"
+        body = json.loads(request.content)
+        if request.url.path == "/ilink/bot/getconfig":
+            seen_config = True
+            assert body["ilink_user_id"] == "peer"
+            assert body["context_token"] == "ctx-token"
+            return httpx.Response(200, json={"ret": 0, "typing_ticket": "ticket-1"})
+        if request.url.path == "/ilink/bot/sendtyping":
+            seen_typing = True
+            assert body["ilink_user_id"] == "peer"
+            assert body["typing_ticket"] == "ticket-1"
+            assert body["status"] == TYPING_START
+            return httpx.Response(200, json={"ret": 0})
+        raise AssertionError(f"unexpected path: {request.url.path}")
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = ILinkClient(
+            base_url="https://ilink.example",
+            token="token",
+            client=http_client,
+        )
+        config = await client.get_config(user_id="peer", context_token="ctx-token")
+        response = await client.send_typing(
+            to_user_id="peer",
+            typing_ticket=str(config["typing_ticket"]),
+            status=TYPING_START,
+        )
+
+    assert config == {"ret": 0, "typing_ticket": "ticket-1"}
+    assert response == {"ret": 0}
+    assert seen_config
+    assert seen_typing
+
+
 class FakeGateway:
     def __init__(self, *, fail: bool = False) -> None:
         self.messages: list[Any] = []
@@ -128,6 +171,8 @@ class FakeGateway:
 class FakeILinkClient:
     def __init__(self) -> None:
         self.sent: list[tuple[str, str, str, str | None]] = []
+        self.typing: list[tuple[str, str, int]] = []
+        self.config_calls: list[tuple[str, str | None]] = []
 
     async def send_text(
         self,
@@ -138,6 +183,20 @@ class FakeILinkClient:
         client_id: str | None = None,
     ) -> dict[str, int]:
         self.sent.append((to_user_id, text, context_token, client_id))
+        return {"ret": 0}
+
+    async def get_config(self, *, user_id: str, context_token: str | None) -> dict[str, object]:
+        self.config_calls.append((user_id, context_token))
+        return {"ret": 0, "typing_ticket": "ticket-1"}
+
+    async def send_typing(
+        self,
+        *,
+        to_user_id: str,
+        typing_ticket: str,
+        status: int,
+    ) -> dict[str, int]:
+        self.typing.append((to_user_id, typing_ticket, status))
         return {"ret": 0}
 
 
@@ -166,6 +225,11 @@ async def test_ilink_runner_forwards_text_to_a2a_and_replies(tmp_path) -> None:
     assert gateway.messages[0].gateway == "ilink"
     assert gateway.messages[0].from_user == "peer"
     assert gateway.messages[0].content == "hi"
+    assert ilink_client.config_calls == [("peer", "ctx-token")]
+    assert ilink_client.typing == [
+        ("peer", "ticket-1", TYPING_START),
+        ("peer", "ticket-1", TYPING_STOP),
+    ]
     assert ilink_client.sent == [("peer", "reply", "ctx-token", None)]
 
 
@@ -191,6 +255,10 @@ async def test_ilink_runner_reports_upstream_errors_without_raising(tmp_path) ->
     )
 
     assert reply is None
+    assert ilink_client.typing == [
+        ("peer", "ticket-1", TYPING_START),
+        ("peer", "ticket-1", TYPING_STOP),
+    ]
     assert ilink_client.sent == [
         ("peer", "The upstream A2A agent is unavailable.", "ctx-token", None)
     ]

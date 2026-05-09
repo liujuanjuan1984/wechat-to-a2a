@@ -28,6 +28,8 @@ ILINK_APP_CLIENT_VERSION = (2 << 16) | (2 << 8) | 0
 
 EP_GET_UPDATES = "ilink/bot/getupdates"
 EP_SEND_MESSAGE = "ilink/bot/sendmessage"
+EP_SEND_TYPING = "ilink/bot/sendtyping"
+EP_GET_CONFIG = "ilink/bot/getconfig"
 EP_GET_BOT_QR = "ilink/bot/get_bot_qrcode"
 EP_GET_QR_STATUS = "ilink/bot/get_qrcode_status"
 
@@ -38,9 +40,13 @@ MSG_STATE_FINISH = 2
 
 LONG_POLL_TIMEOUT_SECONDS = 35.0
 API_TIMEOUT_SECONDS = 15.0
+CONFIG_TIMEOUT_SECONDS = 10.0
 QR_TIMEOUT_SECONDS = 35.0
 SESSION_EXPIRED_ERRCODE = -14
 RATE_LIMIT_ERRCODE = -2
+TYPING_TICKET_TTL_SECONDS = 600.0
+TYPING_START = 1
+TYPING_STOP = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,6 +210,38 @@ class ILinkClient:
         except httpx.TimeoutException:
             return {"ret": 0, "msgs": [], "get_updates_buf": sync_buf}
 
+    async def get_config(
+        self,
+        *,
+        user_id: str,
+        context_token: str | None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"ilink_user_id": user_id}
+        if context_token:
+            payload["context_token"] = context_token
+        return await self._post(
+            endpoint=EP_GET_CONFIG,
+            payload=payload,
+            timeout_seconds=CONFIG_TIMEOUT_SECONDS,
+        )
+
+    async def send_typing(
+        self,
+        *,
+        to_user_id: str,
+        typing_ticket: str,
+        status: int,
+    ) -> dict[str, Any]:
+        return await self._post(
+            endpoint=EP_SEND_TYPING,
+            payload={
+                "ilink_user_id": to_user_id,
+                "typing_ticket": typing_ticket,
+                "status": status,
+            },
+            timeout_seconds=CONFIG_TIMEOUT_SECONDS,
+        )
+
     async def send_text(
         self,
         *,
@@ -297,6 +335,7 @@ class ILinkGatewayRunner:
         self._poll_interval_seconds = poll_interval_seconds
         self._send_chunk_delay_seconds = send_chunk_delay_seconds
         self._seen_message_ids: set[str] = set()
+        self._typing_tickets: dict[str, tuple[str, float]] = {}
 
     async def run_forever(self) -> None:  # pragma: no cover
         sync_buf = self._state_store.load_sync_buf(self._account_id)
@@ -334,6 +373,7 @@ class ILinkGatewayRunner:
                 inbound.context_token,
             )
 
+        await self._send_typing_status(inbound.chat_id, TYPING_START)
         try:
             reply = await self._gateway.handle_message(
                 WeChatMessage(
@@ -348,6 +388,7 @@ class ILinkGatewayRunner:
             )
         except Exception:
             logger.exception("upstream A2A handling failed for iLink chat_id=%s", inbound.chat_id)
+            await self._send_typing_status(inbound.chat_id, TYPING_STOP)
             reply = GatewayReply(
                 text="The upstream A2A agent is unavailable.",
                 chunks=["The upstream A2A agent is unavailable."],
@@ -357,8 +398,42 @@ class ILinkGatewayRunner:
             )
             await self._send_reply(inbound.chat_id, reply)
             return None
+        await self._send_typing_status(inbound.chat_id, TYPING_STOP)
         await self._send_reply(inbound.chat_id, reply)
         return reply
+
+    async def _send_typing_status(self, chat_id: str, status: int) -> None:
+        typing_ticket = await self._typing_ticket(chat_id)
+        if not typing_ticket:
+            return
+        try:
+            await self._ilink_client.send_typing(
+                to_user_id=chat_id,
+                typing_ticket=typing_ticket,
+                status=status,
+            )
+        except Exception as exc:
+            action = "start" if status == TYPING_START else "stop"
+            logger.debug("iLink typing %s failed for chat_id=%s: %s", action, chat_id, exc)
+
+    async def _typing_ticket(self, chat_id: str) -> str | None:
+        cached = self._typing_tickets.get(chat_id)
+        if cached and time.time() - cached[1] < TYPING_TICKET_TTL_SECONDS:
+            return cached[0]
+        context_token = self._state_store.get_context_token(self._account_id, chat_id)
+        try:
+            response = await self._ilink_client.get_config(
+                user_id=chat_id,
+                context_token=context_token,
+            )
+        except Exception as exc:
+            logger.debug("iLink getconfig failed for chat_id=%s: %s", chat_id, exc)
+            return None
+        typing_ticket = _optional_str(response.get("typing_ticket"))
+        if not typing_ticket:
+            return None
+        self._typing_tickets[chat_id] = (typing_ticket, time.time())
+        return typing_ticket
 
     async def _send_reply(self, chat_id: str, reply: GatewayReply) -> None:
         chunks = reply.chunks or [reply.text]
