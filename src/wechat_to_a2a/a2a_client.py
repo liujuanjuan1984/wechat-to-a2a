@@ -97,7 +97,7 @@ class A2AClient:
         if task_id:
             request.message.task_id = task_id
 
-        logger.info(
+        logger.debug(
             "A2A send_message start mode=%s message_id=%s input_chars=%s has_context=%s "
             "has_task=%s",
             "streaming" if sdk_client.streaming else "non-streaming",
@@ -126,7 +126,7 @@ class A2AClient:
                 reply.state,
             )
         else:
-            logger.info(
+            logger.debug(
                 "A2A send_message completed text_chars=%s context_id=%s task_id=%s state=%s",
                 len(reply.text),
                 reply.context_id,
@@ -155,7 +155,7 @@ class A2AClient:
             streaming=bool(card.capabilities.streaming),
             endpoint=endpoint,
         )
-        logger.info(
+        logger.debug(
             "A2A agent card loaded name=%r version=%r streaming_declared=%s "
             "selected_mode=%s interfaces=%s",
             card.name,
@@ -175,7 +175,7 @@ class A2AClient:
         return entry
 
     async def _fetch_agent_card(self, httpx_client: httpx.AsyncClient):
-        logger.info("A2A fetching agent card url=%s", self._agent_card_url)
+        logger.debug("A2A fetching agent card url=%s", self._agent_card_url)
         response = await asyncio.wait_for(
             httpx_client.get(self._agent_card_url),
             timeout=self._timeout_seconds,
@@ -242,7 +242,7 @@ class A2AClient:
             ):
                 raise TimeoutError(f"A2A stream total timeout after {total_timeout:.1f}s")
             accumulator.consume(event)
-            logger.info("A2A event consumed %s", accumulator.last_event_summary())
+            logger.debug("A2A event consumed %s", accumulator.last_event_summary())
             if accumulator.state in TURN_TERMINAL_STATES:
                 break
         return accumulator.reply()
@@ -262,7 +262,7 @@ class A2AClient:
                     response_started = True
                     await _notify_response_started(on_response_started)
                 accumulator.consume(event)
-                logger.info("A2A event consumed %s", accumulator.last_event_summary())
+                logger.debug("A2A event consumed %s", accumulator.last_event_summary())
                 if accumulator.state in TURN_TERMINAL_STATES:
                     break
         except TimeoutError as exc:
@@ -356,7 +356,7 @@ class A2AClient:
         while True:
             task = await self._get_task(task_id)
             reply = _reply_from_task(task)
-            logger.info(
+            logger.debug(
                 "A2A GetTask recovery snapshot task_id=%s context_id=%s state=%s text_chars=%s",
                 reply.task_id,
                 reply.context_id,
@@ -391,10 +391,6 @@ class _StreamAccumulator:
         self.task_id: str | None = None
         self.state: str | None = None
 
-    @property
-    def event_count(self) -> int:
-        return len(self._event_kinds)
-
     def consume(self, response: StreamResponse) -> None:
         if response.HasField("task"):
             self._consume_task(response.task)
@@ -427,7 +423,7 @@ class _StreamAccumulator:
     def summary(self) -> dict[str, object]:
         text = self._text()
         return {
-            "events": self.event_count,
+            "events": len(self._event_kinds),
             "event_kinds": list(self._event_kinds),
             "text_chars": len(text),
             "chunk_count": len(self._chunks),
@@ -454,13 +450,13 @@ class _StreamAccumulator:
         )
 
     def _consume_message_response(self, response: StreamResponse) -> None:
-        reply = _reply_from_stream_response(response)
-        if reply.text:
-            self._chunks.append(reply.text)
-        self.context_id = reply.context_id or self.context_id
-        self.task_id = reply.task_id or self.task_id
-        self.state = reply.state or self.state
-        self._record_event("message", text_chars=len(reply.text))
+        message = response.message
+        text = _extract_text(message.parts)
+        if text:
+            self._chunks.append(text)
+        self.context_id = message.context_id or self.context_id
+        self.task_id = message.task_id or self.task_id
+        self._record_event("message", text_chars=len(text))
 
     def _consume_artifact_update_response(self, response: StreamResponse) -> None:
         update = response.artifact_update
@@ -566,19 +562,6 @@ def _parse_stream_response_payload(payload: str) -> StreamResponse:
         message = getattr(json_rpc_response.error, "message", "unknown error")
         raise RuntimeError(f"A2A upstream JSON-RPC error {code}: {message}")
     return cast(StreamResponse, json_format.ParseDict(json_rpc_response.result, StreamResponse()))
-
-
-def _reply_from_stream_response(response: StreamResponse) -> A2AReply:
-    if response.HasField("task"):
-        return _reply_from_task(response.task)
-    if response.HasField("message"):
-        return A2AReply(
-            text=_extract_text(response.message.parts),
-            context_id=response.message.context_id or None,
-            task_id=response.message.task_id or None,
-            state=None,
-        )
-    raise RuntimeError(f"unexpected A2A response shape: {response!r}")
 
 
 def _reply_from_task(task: Task) -> A2AReply:

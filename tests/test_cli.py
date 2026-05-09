@@ -21,6 +21,7 @@ def test_cli_accepts_serve_command() -> None:
     assert args.command == "serve"
     assert args.host == "0.0.0.0"
     assert args.port == 9000
+    assert args.log_level == "warning"
 
 
 def test_cli_accepts_ilink_login_command() -> None:
@@ -101,7 +102,7 @@ def test_load_settings_reads_upstream_card_url_from_env(
     settings = _load_settings(parser, args)
 
     assert (
-        settings.upstream_a2a_card_url_value == "https://agent.example/.well-known/agent-card.json"
+        str(settings.upstream_a2a_card_url) == "https://agent.example/.well-known/agent-card.json"
     )
 
 
@@ -122,7 +123,7 @@ def test_load_settings_reads_upstream_card_url_from_persistent_config(
     settings = _load_settings(parser, args)
 
     assert (
-        settings.upstream_a2a_card_url_value == "https://saved.example/.well-known/agent-card.json"
+        str(settings.upstream_a2a_card_url) == "https://saved.example/.well-known/agent-card.json"
     )
 
 
@@ -145,7 +146,7 @@ def test_load_settings_prefers_env_over_persistent_config(
 
     settings = _load_settings(parser, args)
 
-    assert settings.upstream_a2a_card_url_value == "https://env.example/.well-known/agent-card.json"
+    assert str(settings.upstream_a2a_card_url) == "https://env.example/.well-known/agent-card.json"
 
 
 def test_load_settings_prefers_cli_over_env_and_persistent_config(
@@ -173,7 +174,7 @@ def test_load_settings_prefers_cli_over_env_and_persistent_config(
 
     settings = _load_settings(parser, args)
 
-    assert settings.upstream_a2a_card_url_value == "https://cli.example/.well-known/agent-card.json"
+    assert str(settings.upstream_a2a_card_url) == "https://cli.example/.well-known/agent-card.json"
 
 
 def test_resolve_ilink_credentials_uses_latest_saved_account(tmp_path: Path) -> None:

@@ -40,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve = subparsers.add_parser("serve", help="Run the WeChat gateway HTTP server")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
-    serve.add_argument("--log-level", default="info")
+    serve.add_argument("--log-level", default="warning")
     _add_upstream_a2a_args(serve)
 
     ilink_login = subparsers.add_parser("ilink-login", help="Login to WeChat via iLink QR")
@@ -74,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.WARNING)
 
     if args.command == "serve":
         settings = _load_settings(parser, args)
@@ -84,14 +84,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "ilink-login":
         state_store = ILinkStateStore(args.state_dir)
-        credentials = asyncio.run(
+        login_result = asyncio.run(
             run_qr_login(
                 state_store=state_store,
                 bot_type=args.bot_type,
                 timeout_seconds=args.timeout,
             )
         )
-        return 0 if credentials is not None else 1
+        return 0 if login_result is not None else 1
 
     if args.command == "ilink-run":
         settings = _load_settings(parser, args)
@@ -106,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
         except RuntimeError as exc:
             parser.exit(2, f"{parser.prog}: {exc}\n")
         a2a_client = A2AClient(
-            agent_card_url=settings.upstream_a2a_card_url_value,
+            agent_card_url=str(settings.upstream_a2a_card_url),
             bearer_token=settings.upstream_a2a_bearer_token,
             timeout_seconds=settings.upstream_a2a_timeout_seconds,
             stream_idle_timeout_seconds=settings.upstream_a2a_stream_idle_timeout_seconds,
@@ -246,7 +246,7 @@ def _resolve_ilink_credentials(
     base_url = base_url or os.getenv("WECHAT_TO_A2A_ILINK_BASE_URL")
 
     if not account_id:
-        account_id = _default_saved_account_id(state_store)
+        account_id = state_store.single_saved_account_id() or state_store.latest_saved_account_id()
     if not account_id:
         raise RuntimeError("iLink account id is required; run `wechat-to-a2a ilink-login` first")
 
@@ -262,10 +262,6 @@ def _resolve_ilink_credentials(
         base_url=base_url or "https://ilinkai.weixin.qq.com",
         user_id=user_id,
     )
-
-
-def _default_saved_account_id(state_store: ILinkStateStore) -> str | None:
-    return state_store.single_saved_account_id() or state_store.latest_saved_account_id()
 
 
 def _run_until_interrupted(coro: Coroutine[Any, Any, Any]) -> int:

@@ -156,7 +156,7 @@ async def test_send_message_logs_empty_upstream_reply(caplog) -> None:
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport) as http_client:
         client = A2AClient(agent_card_url=AGENT_CARD_URL, client=http_client)
-        with caplog.at_level(logging.INFO, logger="wechat_to_a2a.a2a_client"):
+        with caplog.at_level(logging.DEBUG, logger="wechat_to_a2a.a2a_client"):
             reply = await client.send_message(text="hello")
 
     assert reply.text == ""

@@ -21,7 +21,7 @@ def create_app(settings: Settings, gateway: WeChatA2AGateway | None = None) -> F
     app = FastAPI(title="wechat-to-a2a", version="0.1.0")
     if gateway is None:
         client = A2AClient(
-            agent_card_url=settings.upstream_a2a_card_url_value,
+            agent_card_url=str(settings.upstream_a2a_card_url),
             bearer_token=settings.upstream_a2a_bearer_token,
             timeout_seconds=settings.upstream_a2a_timeout_seconds,
             stream_idle_timeout_seconds=settings.upstream_a2a_stream_idle_timeout_seconds,
@@ -72,10 +72,13 @@ def create_app(settings: Settings, gateway: WeChatA2AGateway | None = None) -> F
         message = parse_message_xml(payload)
         if message.msg_type != "text":
             reply = "Only text messages are supported right now."
-            return _wechat_xml_response(
-                to_user=message.from_user,
-                from_user=message.to_user,
-                content=reply,
+            return Response(
+                content=render_text_reply(
+                    to_user=message.from_user,
+                    from_user=message.to_user,
+                    content=reply,
+                ),
+                media_type="application/xml",
             )
 
         try:
@@ -92,15 +95,13 @@ def create_app(settings: Settings, gateway: WeChatA2AGateway | None = None) -> F
         else:
             reply = gateway_reply.text
 
-        return _wechat_xml_response(
-            to_user=message.from_user,
-            from_user=message.to_user,
-            content=reply,
+        return Response(
+            content=render_text_reply(
+                to_user=message.from_user,
+                from_user=message.to_user,
+                content=reply,
+            ),
+            media_type="application/xml",
         )
 
     return app
-
-
-def _wechat_xml_response(*, to_user: str, from_user: str, content: str) -> Response:
-    xml = render_text_reply(to_user=to_user, from_user=from_user, content=content)
-    return Response(content=xml, media_type="application/xml")

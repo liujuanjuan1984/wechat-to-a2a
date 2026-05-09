@@ -83,7 +83,3 @@ class Settings(BaseSettings):
     conversation_state_path: Path = Field(default_factory=default_conversation_state_path)
     wechat_reply_max_chars: int = Field(default=2000, gt=0)
     wechat_split_multiline_messages: bool = False
-
-    @property
-    def upstream_a2a_card_url_value(self) -> str:
-        return str(self.upstream_a2a_card_url)
