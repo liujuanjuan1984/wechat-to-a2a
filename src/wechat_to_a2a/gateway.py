@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Protocol
 
 from .a2a_client import A2AReply
@@ -11,6 +12,9 @@ from .formatting import MAX_WECHAT_TEXT_CHARS, split_wechat_text
 from .wechat import WeChatMessage
 
 CONTINUATION_STATES = frozenset({"auth-required", "input-required", "working"})
+DEFAULT_CONVERSATION_IDLE_TIMEOUT = timedelta(hours=6)
+RESET_COMMAND = "/reset"
+RESET_CONFIRMATION_TEXT = "Started a new conversation."
 logger = logging.getLogger(__name__)
 
 
@@ -42,11 +46,13 @@ class WeChatA2AGateway:
         conversation_store: ConversationStore,
         reply_max_chars: int = MAX_WECHAT_TEXT_CHARS,
         split_multiline_messages: bool = False,
+        conversation_idle_timeout: timedelta = DEFAULT_CONVERSATION_IDLE_TIMEOUT,
     ) -> None:
         self._a2a_client = a2a_client
         self._conversation_store = conversation_store
         self._reply_max_chars = reply_max_chars
         self._split_multiline_messages = split_multiline_messages
+        self._conversation_idle_timeout = conversation_idle_timeout
 
     async def handle_message(
         self,
@@ -60,6 +66,18 @@ class WeChatA2AGateway:
             wechat_account_id=message.to_user,
             wechat_user_id=message.from_user,
         )
+        if self._conversation_store.is_idle_expired(
+            key=conversation_key,
+            idle_timeout=self._conversation_idle_timeout,
+        ):
+            state = self._conversation_store.reset_a2a_state(key=conversation_key)
+        self._conversation_store.touch_interaction(key=conversation_key)
+        if message.content.strip() == RESET_COMMAND:
+            self._conversation_store.reset_a2a_state(key=conversation_key)
+            return self._local_reply(
+                text=RESET_CONFIRMATION_TEXT,
+                conversation_key=conversation_key,
+            )
         a2a_reply = await self._a2a_client.send_message(
             text=message.content,
             context_id=state.a2a_context_id,
@@ -97,4 +115,28 @@ class WeChatA2AGateway:
             conversation_key=conversation_key,
             context_id=context_id,
             task_id=task_id,
+        )
+
+    def record_outbound_interaction(self, conversation_key: str) -> None:
+        if self._conversation_store.get(key=conversation_key) is None:
+            return
+        self._conversation_store.touch_interaction(key=conversation_key)
+
+    def _local_reply(
+        self,
+        *,
+        text: str,
+        conversation_key: str,
+    ) -> GatewayReply:
+        chunks = split_wechat_text(
+            text,
+            max_chars=self._reply_max_chars,
+            split_multiline_messages=self._split_multiline_messages,
+        )
+        return GatewayReply(
+            text="\n\n".join(chunks) if chunks else text,
+            chunks=chunks,
+            conversation_key=conversation_key,
+            context_id=None,
+            task_id=None,
         )

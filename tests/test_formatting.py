@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from wechat_to_a2a.formatting import format_wechat_text, split_wechat_text
+from wechat_to_a2a.formatting import split_wechat_text
 
 
-def test_format_wechat_text_returns_empty_string_for_none() -> None:
-    assert format_wechat_text(None) == ""
+def test_split_wechat_text_returns_empty_list_for_none() -> None:
+    assert split_wechat_text(None) == []
 
 
 def test_split_wechat_text_keeps_structured_table_together() -> None:
