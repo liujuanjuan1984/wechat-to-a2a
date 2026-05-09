@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import suppress
 from dataclasses import dataclass
 from uuid import uuid4
@@ -67,6 +67,7 @@ class A2AClient:
         text: str,
         context_id: str | None = None,
         task_id: str | None = None,
+        on_response_started: Callable[[], Awaitable[None] | None] | None = None,
     ) -> A2AReply:
         sdk_client = await self._get_sdk_client()
         request = SendMessageRequest()
@@ -88,6 +89,7 @@ class A2AClient:
             bool(task_id),
         )
         accumulator = _StreamAccumulator()
+        response_started = False
         async for event in self._iter_events_with_timeouts(
             sdk_client.client.send_message(request),
             streaming=sdk_client.streaming,
@@ -95,6 +97,9 @@ class A2AClient:
             if event is None:
                 logger.debug("A2A upstream stream heartbeat")
                 continue
+            if sdk_client.streaming and not response_started:
+                response_started = True
+                await _notify_response_started(on_response_started)
             accumulator.consume(event)
             logger.info("A2A event consumed %s", accumulator.last_event_summary())
             if accumulator.state in TURN_TERMINAL_STATES:
@@ -416,6 +421,16 @@ async def _iter_stream_events_with_heartbeat(
 
 def _positive_float_or_none(value: float) -> float | None:
     return float(value) if value > 0 else None
+
+
+async def _notify_response_started(
+    callback: Callable[[], Awaitable[None] | None] | None,
+) -> None:
+    if callback is None:
+        return
+    result = callback()
+    if result is not None:
+        await result
 
 
 def _next_wait_timeout(

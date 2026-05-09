@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import xml.etree.ElementTree as ET
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
@@ -73,8 +74,19 @@ def test_get_wechat_verification_rejects_invalid_signature(tmp_path) -> None:
 def test_post_text_message_forwards_to_a2a(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     calls: list[tuple[str, str | None, str | None]] = []
 
-    async def fake_send_message(self, *, text: str, context_id: str | None = None, task_id=None):
+    async def fake_send_message(
+        self,
+        *,
+        text: str,
+        context_id: str | None = None,
+        task_id=None,
+        on_response_started: Callable[[], Awaitable[None] | None] | None = None,
+    ):
         calls.append((text, context_id, task_id))
+        if on_response_started is not None:
+            result = on_response_started()
+            if result is not None:
+                await result
         return A2AReply(
             text="agent reply", context_id="ctx-user", task_id="task-1", state="completed"
         )

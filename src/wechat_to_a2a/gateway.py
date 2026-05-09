@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -20,6 +21,7 @@ class A2AClientProtocol(Protocol):
         text: str,
         context_id: str | None = None,
         task_id: str | None = None,
+        on_response_started: Callable[[], Awaitable[None] | None] | None = None,
     ) -> A2AReply: ...
 
 
@@ -46,7 +48,12 @@ class WeChatA2AGateway:
         self._reply_max_chars = reply_max_chars
         self._split_multiline_messages = split_multiline_messages
 
-    async def handle_message(self, message: WeChatMessage) -> GatewayReply:
+    async def handle_message(
+        self,
+        message: WeChatMessage,
+        *,
+        on_response_started: Callable[[], Awaitable[None] | None] | None = None,
+    ) -> GatewayReply:
         conversation_key = conversation_key_for_wechat(message)
         state = self._conversation_store.get_or_create(
             key=conversation_key,
@@ -57,6 +64,7 @@ class WeChatA2AGateway:
             text=message.content,
             context_id=state.a2a_context_id,
             task_id=state.a2a_task_id,
+            on_response_started=on_response_started,
         )
 
         context_id = a2a_reply.context_id or state.a2a_context_id

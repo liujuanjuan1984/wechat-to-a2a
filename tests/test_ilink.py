@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 import httpx
@@ -151,12 +153,31 @@ async def test_ilink_client_fetches_config_and_sends_typing_payload() -> None:
 
 
 class FakeGateway:
-    def __init__(self, *, fail: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail: bool = False,
+        trigger_response_started: bool = True,
+        delay_seconds: float = 0.0,
+    ) -> None:
         self.messages: list[Any] = []
         self.fail = fail
+        self.trigger_response_started = trigger_response_started
+        self.delay_seconds = delay_seconds
 
-    async def handle_message(self, message: Any) -> GatewayReply:
+    async def handle_message(
+        self,
+        message: Any,
+        *,
+        on_response_started: Callable[[], Awaitable[None] | None] | None = None,
+    ) -> GatewayReply:
         self.messages.append(message)
+        if self.delay_seconds > 0:
+            await asyncio.sleep(self.delay_seconds)
+        if self.trigger_response_started and on_response_started is not None:
+            result = on_response_started()
+            if result is not None:
+                await result
         if self.fail:
             raise RuntimeError("upstream failed")
         return GatewayReply(
@@ -261,4 +282,33 @@ async def test_ilink_runner_reports_upstream_errors_without_raising(tmp_path) ->
     ]
     assert ilink_client.sent == [
         ("peer", "The upstream A2A agent is unavailable.", "ctx-token", None)
+    ]
+
+
+async def test_ilink_runner_uses_delayed_typing_for_slow_turn(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("wechat_to_a2a.ilink.TYPING_START_DELAY_SECONDS", 0.0)
+    store = ILinkStateStore(tmp_path)
+    gateway = FakeGateway(trigger_response_started=False, delay_seconds=0.01)
+    ilink_client = FakeILinkClient()
+    runner = ILinkGatewayRunner(
+        account_id="acct",
+        ilink_client=cast(ILinkClient, ilink_client),
+        gateway=cast(WeChatA2AGateway, gateway),
+        state_store=store,
+        send_chunk_delay_seconds=0,
+    )
+
+    reply = await runner.handle_raw_message(
+        {
+            "from_user_id": "peer",
+            "message_id": "msg-1",
+            "context_token": "ctx-token",
+            "item_list": [{"type": 1, "text_item": {"text": "hi"}}],
+        }
+    )
+
+    assert reply is not None
+    assert ilink_client.typing == [
+        ("peer", "ticket-1", TYPING_START),
+        ("peer", "ticket-1", TYPING_STOP),
     ]

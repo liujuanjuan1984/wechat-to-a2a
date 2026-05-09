@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
 from wechat_to_a2a.a2a_client import A2AReply
 from wechat_to_a2a.conversation import ConversationStore
 from wechat_to_a2a.gateway import WeChatA2AGateway
@@ -17,8 +19,13 @@ class FakeA2AClient:
         text: str,
         context_id: str | None = None,
         task_id: str | None = None,
+        on_response_started: Callable[[], Awaitable[None] | None] | None = None,
     ) -> A2AReply:
         self.calls.append((text, context_id, task_id))
+        if on_response_started is not None:
+            result = on_response_started()
+            if result is not None:
+                await result
         return self.replies.pop(0)
 
 

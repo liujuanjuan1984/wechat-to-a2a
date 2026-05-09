@@ -285,6 +285,74 @@ async def test_send_message_consumes_streaming_events_when_agent_supports_stream
 
 
 @pytest.mark.asyncio
+async def test_send_message_notifies_when_streaming_response_starts() -> None:
+    callback_calls = 0
+
+    async def on_response_started() -> None:
+        nonlocal callback_calls
+        callback_calls += 1
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json=_agent_card(streaming=True))
+        stream = (
+            'data: {"jsonrpc":"2.0","id":"1","result":{"artifactUpdate":'
+            '{"taskId":"task-1","contextId":"ctx-1","artifact":{"parts":[{"text":"hi"}]}}}}\n\n'
+            'data: {"jsonrpc":"2.0","id":"1","result":{"statusUpdate":'
+            '{"taskId":"task-1","contextId":"ctx-1","status":{"state":"TASK_STATE_COMPLETED"}}}}\n\n'
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=stream,
+        )
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = A2AClient(agent_card_url=AGENT_CARD_URL, client=http_client)
+        reply = await client.send_message(text="hello", on_response_started=on_response_started)
+
+    assert reply.text == "hi"
+    assert callback_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_send_message_does_not_notify_on_response_started_for_non_streaming_turn() -> None:
+    callback_calls = 0
+
+    async def on_response_started() -> None:
+        nonlocal callback_calls
+        callback_calls += 1
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json=_agent_card(streaming=False))
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": "wechat-to-a2a",
+                "result": {
+                    "task": {
+                        "id": "task-1",
+                        "contextId": "ctx-1",
+                        "status": {"state": "TASK_STATE_COMPLETED"},
+                        "artifacts": [{"parts": [{"text": "hello back"}]}],
+                    },
+                },
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = A2AClient(agent_card_url=AGENT_CARD_URL, client=http_client)
+        reply = await client.send_message(text="hello", on_response_started=on_response_started)
+
+    assert reply.text == "hello back"
+    assert callback_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_streaming_turn_is_not_cut_off_by_request_timeout() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/.well-known/agent-card.json":
