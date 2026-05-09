@@ -412,6 +412,7 @@ class ILinkGatewayRunner:
             return None
         await self._stop_typing_task(inbound.chat_id, typing_task, typing_stop_event)
         await self._send_reply(inbound.chat_id, reply)
+        self._gateway.record_outbound_interaction(reply.conversation_key)
         return reply
 
     async def _send_typing_status(self, chat_id: str, status: int) -> None:

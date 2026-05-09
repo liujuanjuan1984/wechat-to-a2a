@@ -16,6 +16,8 @@ Early gateway. The current implementation supports:
 - Per-WeChat-account/user A2A conversation state
 - A2A `contextId` reuse across WeChat messages
 - A2A `taskId` continuation for `input-required`, `auth-required`, and `working` tasks
+- Idle conversation expiry after six hours without interaction
+- Local `/reset` command to start a fresh upstream A2A conversation
 - Streaming A2A consumption with heartbeat-aware waiting
 - Optional JSON conversation-state persistence
 - WeChat-oriented text formatting and reply chunking
@@ -47,6 +49,11 @@ cleared while the `contextId` remains available for future turns.
 
 The gateway does not expose WeChat as an A2A service. It is a WeChat entrypoint
 for any A2A 1.0-compatible upstream service.
+
+If a conversation stays idle for more than six hours, the next inbound message
+starts a fresh upstream A2A conversation while keeping the same WeChat
+conversation key. Users can also send `/reset` to clear the stored upstream
+`contextId` and `taskId` immediately without forwarding the command upstream.
 
 ## iLink Quick Start
 

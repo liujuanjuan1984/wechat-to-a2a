@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from wechat_to_a2a.a2a_client import A2AReply
 from wechat_to_a2a.app import create_app
+from wechat_to_a2a.gateway import GatewayReply
 from wechat_to_a2a.settings import Settings
 
 
@@ -133,3 +134,39 @@ def test_post_non_text_message_returns_unsupported_reply(tmp_path) -> None:
     assert response.status_code == 200
     root = ET.fromstring(response.text)
     assert root.findtext("Content") == "Only text messages are supported right now."
+
+
+def test_post_text_message_records_outbound_interaction(tmp_path) -> None:
+    class FakeGateway:
+        def __init__(self) -> None:
+            self.recorded: list[str] = []
+
+        async def handle_message(self, message):
+            return GatewayReply(
+                text=f"reply:{message.content}",
+                chunks=[f"reply:{message.content}"],
+                conversation_key="wechat:official:gh_x:user-1",
+                context_id="ctx-1",
+                task_id=None,
+            )
+
+        def record_outbound_interaction(self, conversation_key: str) -> None:
+            self.recorded.append(conversation_key)
+
+    gateway = FakeGateway()
+    app = create_app(_settings(tmp_path), gateway=gateway)  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    xml = b"""
+    <xml>
+      <ToUserName><![CDATA[gh_x]]></ToUserName>
+      <FromUserName><![CDATA[user-1]]></FromUserName>
+      <CreateTime>123</CreateTime>
+      <MsgType><![CDATA[text]]></MsgType>
+      <Content><![CDATA[hello]]></Content>
+    </xml>
+    """
+    response = client.post(f"/wechat?{_query()}", content=xml)
+
+    assert response.status_code == 200
+    assert gateway.recorded == ["wechat:official:gh_x:user-1"]

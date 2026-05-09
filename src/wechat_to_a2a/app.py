@@ -93,6 +93,7 @@ def create_app(settings: Settings, gateway: WeChatA2AGateway | None = None) -> F
             logger.warning("upstream A2A handling failed: %s", exc)
             reply = "The upstream A2A agent is unavailable."
         else:
+            gateway.record_outbound_interaction(gateway_reply.conversation_key)
             reply = gateway_reply.text
 
         return Response(
