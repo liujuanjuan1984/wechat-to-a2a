@@ -16,9 +16,9 @@ the upstream service that provides the actual agent behavior.
 - Preserves multi-turn conversation context.
 - Starts a fresh conversation after a configurable idle timeout.
 - Lets users reset the conversation with `/reset`.
-- Supports two gateway modes:
-  - `ilink-run` for quick trials through iLink QR login.
-  - `serve` for official WeChat public account webhook deployments.
+- Supports two WeChat entry modes:
+  - `ilink-run` for iLink QR login without a public webhook endpoint.
+  - `serve` for official WeChat public account callback handling at `/wechat`.
 
 ## Installation
 
@@ -34,9 +34,10 @@ For local development, use `uv`:
 uv sync --all-extras
 ```
 
-## Quick Start With iLink
+## iLink Mode
 
-Use this mode when you want to try the gateway without a public webhook URL.
+Use this mode when you want WeChat access through iLink QR login without running
+a public WeChat webhook endpoint.
 
 ```bash
 wechat-to-a2a ilink-login
@@ -53,10 +54,13 @@ wechat-to-a2a config set-upstream \
   --bearer-token "optional-upstream-token"
 ```
 
-## Official WeChat Webhook Mode
+## Official WeChat Public Account Mode
 
 Use this mode when you already have an official WeChat public account and a
 public HTTPS endpoint.
+
+This mode currently handles plaintext XML callbacks with token signature
+verification and text messages.
 
 ```bash
 export WECHAT_TO_A2A_WECHAT_TOKEN="wechat-callback-token"
@@ -130,9 +134,9 @@ Agent 能力的上游服务。
 - 保持多轮对话上下文。
 - 会话空闲超时后自动开启新会话。
 - 用户可以发送 `/reset` 手动重置会话。
-- 支持两种网关模式：
-  - `ilink-run`：通过 iLink 扫码登录，适合快速试用。
-  - `serve`：用于微信公众号 webhook 正式部署。
+- 支持两种微信入口模式：
+  - `ilink-run`：通过 iLink 扫码登录，不需要公网 webhook 入口。
+  - `serve`：提供微信公众号 `/wechat` 回调处理入口。
 
 ## 安装
 
@@ -148,9 +152,10 @@ pip install wechat-to-a2a
 uv sync --all-extras
 ```
 
-## 使用 iLink 快速启动
+## iLink 模式
 
-如果你想先试用，且暂时没有公网 webhook 地址，可以优先使用这个模式。
+如果你希望通过 iLink 扫码登录接入微信，并且不想运行公网微信公众号 webhook
+入口，可以使用这个模式。
 
 ```bash
 wechat-to-a2a ilink-login
@@ -167,9 +172,11 @@ wechat-to-a2a config set-upstream \
   --bearer-token "optional-upstream-token"
 ```
 
-## 微信公众号 Webhook 模式
+## 微信公众号模式
 
 如果你已经有微信公众号和公网 HTTPS 入口，可以使用这个模式。
+
+当前该模式处理明文 XML 回调，使用 token signature 校验，并支持文本消息。
 
 ```bash
 export WECHAT_TO_A2A_WECHAT_TOKEN="wechat-callback-token"
