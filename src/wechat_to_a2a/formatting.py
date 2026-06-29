@@ -3,17 +3,13 @@ from __future__ import annotations
 MAX_WECHAT_TEXT_CHARS = 2000
 
 
-def format_wechat_text(content: str | None) -> str:
-    return (content or "").strip()
-
-
 def split_wechat_text(
     content: str | None,
     *,
     max_chars: int = MAX_WECHAT_TEXT_CHARS,
     split_multiline_messages: bool = False,
 ) -> list[str]:
-    text = format_wechat_text(content)
+    text = (content or "").strip()
     if not text:
         return []
     if len(text) <= max_chars and (

@@ -42,7 +42,6 @@ def test_ilink_state_store_persists_credentials_and_tokens(tmp_path) -> None:
         account_id="acct",
         token="token",
         base_url="https://ilink.example",
-        user_id="user",
     )
 
     store.save_credentials(credentials)
@@ -161,6 +160,7 @@ class FakeGateway:
         delay_seconds: float = 0.0,
     ) -> None:
         self.messages: list[Any] = []
+        self.recorded: list[str] = []
         self.fail = fail
         self.trigger_response_started = trigger_response_started
         self.delay_seconds = delay_seconds
@@ -187,6 +187,9 @@ class FakeGateway:
             context_id="ctx-a2a",
             task_id=None,
         )
+
+    def record_outbound_interaction(self, conversation_key: str) -> None:
+        self.recorded.append(conversation_key)
 
 
 class FakeILinkClient:
@@ -249,6 +252,7 @@ async def test_ilink_runner_forwards_text_to_a2a_and_replies(tmp_path) -> None:
     assert ilink_client.config_calls == [("peer", "ctx-token")]
     assert ilink_client.typing == []
     assert ilink_client.sent == [("peer", "reply", "ctx-token", None)]
+    assert gateway.recorded == ["wechat:ilink:acct:peer"]
 
 
 async def test_ilink_runner_reports_upstream_errors_without_raising(tmp_path) -> None:
@@ -278,6 +282,7 @@ async def test_ilink_runner_reports_upstream_errors_without_raising(tmp_path) ->
     assert ilink_client.sent == [
         ("peer", "The upstream A2A agent is unavailable.", "ctx-token", None)
     ]
+    assert gateway.recorded == []
 
 
 async def test_ilink_runner_uses_delayed_typing_for_slow_turn(monkeypatch, tmp_path) -> None:
